@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { client } from "@/utils/insforge";
 import {
   Send, LogOut, Loader2, Sparkles, AlertCircle,
-  Hash, Search, X, MessageSquare, Circle, Paperclip, FileText,
+  Hash, Search, X, MessageSquare, Circle, Paperclip, FileText, Moon, Sun,
   Trash2, ChevronRight, Plus, Settings, Bell, Phone, Video, Pin, Users as UsersIcon, Image as ImageIcon, Menu
 } from "lucide-react";
 
@@ -60,12 +60,14 @@ export default function Home() {
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   // ── Users ─────────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
   const [dmUsers, setDmUsers] = useState<Profile[]>([]);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  const [pinnedChats, setPinnedChats] = useState<Set<string>>(new Set());
 
   // ── Connection status (visible to user) ───────────────────────────────────
   const [connStatus, setConnStatus] = useState<"connecting" | "connected" | "error">("connecting");
@@ -89,6 +91,12 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, selectedChat]);
 
+  // ── Theme toggle ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (theme === "dark") document.documentElement.classList.add("dark");
+    else document.documentElement.classList.remove("dark");
+  }, [theme]);
+
   // ── Restore session ───────────────────────────────────────────────────────
   useEffect(() => {
     client.auth.getCurrentUser().then(({ data }) => {
@@ -100,7 +108,28 @@ export default function Home() {
   useEffect(() => {
     if (!user) return;
     client.database.from("profiles").select("id, username").eq("id", user.id).maybeSingle().then(({ data }) => {
-      if (data) setMyProfile(data as Profile);
+      if (data) {
+        setMyProfile(data as Profile);
+        
+        client.database.from("pinned_chats").select("pinned_user_id").eq("user_id", data.id).then(({ data: pinned }) => {
+          if (pinned && pinned.length > 0) {
+            const pinnedIds = (pinned as { pinned_user_id: string }[]).map(p => p.pinned_user_id);
+            setPinnedChats(new Set(pinnedIds));
+            
+            client.database.from("profiles").select("id, username").in("id", pinnedIds).then(({ data: users }) => {
+              if (users) {
+                setDmUsers(prev => {
+                  const newUsers = [...prev];
+                  (users as Profile[]).forEach(u => {
+                    if (!newUsers.find(nu => nu.id === u.id)) newUsers.push(u);
+                  });
+                  return newUsers;
+                });
+              }
+            });
+          }
+        });
+      }
     });
   }, [user]);
 
@@ -317,6 +346,30 @@ export default function Home() {
     setLoadingMore(false);
   };
 
+  const togglePin = async () => {
+    const me = myProfileRef.current;
+    if (!me || selectedChat === "global") return;
+    
+    const isPinned = pinnedChats.has(selectedChat);
+    const newPinned = new Set(pinnedChats);
+    
+    if (isPinned) {
+      newPinned.delete(selectedChat);
+      setPinnedChats(newPinned);
+      await client.database.from("pinned_chats")
+        .delete()
+        .eq("user_id", me.id)
+        .eq("pinned_user_id", selectedChat);
+      showToast("Chat unpinned", selectedChat);
+    } else {
+      newPinned.add(selectedChat);
+      setPinnedChats(newPinned);
+      await client.database.from("pinned_chats")
+        .insert([{ user_id: me.id, pinned_user_id: selectedChat }]);
+      showToast("Chat pinned to favorites", selectedChat);
+    }
+  };
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!searchQuery.trim()) { setSearchResults([]); return; }
@@ -477,27 +530,27 @@ export default function Home() {
   // ─── Auth View ────────────────────────────────────────────────────────────
   if (!user || !myProfile) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0c] p-4 font-sans text-white relative overflow-hidden">
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9fb] dark:bg-[#0a0a0c] p-4 font-sans text-[#191c1e] dark:text-white relative overflow-hidden">
         {/* Accents */}
         <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-[-10%] left-[-5%] w-[40%] h-[40%] bg-[#d3f55b]/10 blur-[140px] rounded-full" />
+          <div className="absolute top-[-10%] left-[-5%] w-[40%] h-[40%] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/10 blur-[140px] rounded-full" />
           <div className="absolute bottom-[-10%] right-[-5%] w-[40%] h-[40%] bg-white/5 blur-[140px] rounded-full" />
         </div>
         
         {/* Box */}
         <div className="w-full max-w-[420px] z-10">
           <div className="flex items-center justify-center gap-3 mb-10">
-              <div className="bg-[#d3f55b] flex items-center justify-center w-12 h-12 rounded-xl shadow-[0_0_20px_rgba(211,245,91,0.2)] -skew-x-6">
-                <span className="text-[#0a0a0c] font-black text-2xl italic">S</span>
+              <div className="bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] flex items-center justify-center w-12 h-12 rounded-xl shadow-[0_0_20px_rgba(211,245,91,0.2)] -skew-x-6">
+                <span className="text-[#191c1e] dark:text-white font-black text-2xl italic">S</span>
               </div>
-              <h1 className="text-3xl font-extrabold tracking-tight text-white">InsForge</h1>
+              <h1 className="text-3xl font-extrabold tracking-tight text-[#191c1e] dark:text-white">InsForge</h1>
           </div>
-          <div className="bg-[#121318]/90 backdrop-blur-3xl border border-white/[0.05] rounded-3xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+          <div className="bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)]/90 backdrop-blur-3xl border border-transparent dark:border-white/5 rounded-3xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
             {!verifyStep && (
-              <div className="flex bg-[#1a1b22] rounded-xl p-1.5 mb-6 shadow-inner border border-white/[0.02]">
+              <div className="flex bg-[#f2f4f6] dark:bg-[#1a1b22] rounded-xl p-1.5 mb-6 shadow-inner border border-transparent dark:border-white/5">
                 {(["signin", "signup"] as const).map(mode => (
                   <button key={mode} type="button" onClick={() => { setAuthMode(mode); setAuthError(""); }}
-                    className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${authMode === mode ? "bg-[#d3f55b] text-[#0a0a0c] shadow-sm transform scale-[1.02]" : "text-white/40 hover:text-white"}`}>
+                    className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${authMode === mode ? "bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white shadow-sm transform scale-[1.02]" : "text-[#191c1e]/50 dark:text-white/50 hover:text-[#191c1e] dark:text-white"}`}>
                     {mode === "signin" ? "Sign In" : "Sign Up"}
                   </button>
                 ))}
@@ -505,9 +558,9 @@ export default function Home() {
             )}
             {verifyStep ? (
               <form onSubmit={handleVerify} className="flex flex-col gap-4">
-                <p className="text-white/70 text-sm text-center">Enter the 6-digit code sent to <strong>{email}</strong></p>
+                <p className="text-[#191c1e]/80 dark:text-white/80 text-sm text-center">Enter the 6-digit code sent to <strong>{email}</strong></p>
                 <input value={otp} onChange={e => setOtp(e.target.value)} placeholder="123456" maxLength={6}
-                  className="w-full px-4 py-3.5 bg-[#18191e] border border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#d3f55b] text-white text-center text-3xl tracking-widest shadow-inner transition-colors" />
+                  className="w-full px-4 py-3.5 bg-[#e0e3e5] dark:bg-[#18191e] border border-transparent dark:border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#0056d2] dark:ring-[#d3f55b] text-[#191c1e] dark:text-white text-center text-3xl tracking-widest shadow-inner transition-colors" />
                 {authError && <ErrorBox msg={authError} />}
                 <AuthBtn loading={authLoading} label="Verify Email" />
               </form>
@@ -519,7 +572,7 @@ export default function Home() {
                 <AuthBtn loading={authLoading} label="Sign In" />
                 <Divider />
                 <button type="button" onClick={handleGuestLogin} disabled={authLoading}
-                  className="w-full border border-white/10 hover:border-white/30 bg-[#16171d] hover:bg-[#1a1b22] text-white/70 hover:text-white py-3.5 rounded-xl font-semibold transition-all shadow-sm">
+                  className="w-full border border-transparent dark:border-white/5 hover:border-transparent dark:border-white/5 bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] hover:bg-[#f2f4f6] dark:bg-[#1a1b22] text-[#191c1e]/80 dark:text-white/80 hover:text-[#191c1e] dark:text-white py-3.5 rounded-xl font-semibold transition-all shadow-sm">
                   {authLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Continue as Guest"}
                 </button>
               </form>
@@ -544,45 +597,45 @@ export default function Home() {
   const chatTitle = selectedChat === "global" ? "Global Room" : selectedDmUser?.username ?? "Direct Message";
 
   return (
-    <div className="flex h-[100dvh] bg-[#0a0a0c] text-white font-sans overflow-hidden md:p-2.5 md:gap-2.5">
+    <div className="flex h-[100dvh] bg-[#f7f9fb] dark:bg-[#0a0a0c] text-[#191c1e] dark:text-white font-sans overflow-hidden md:p-2.5 md:gap-2.5">
       
       {/* 1. Leftmost Nav */}
-      <nav className={`w-[72px] flex-col items-center gap-5 py-6 flex-shrink-0 bg-[#121318] md:rounded-[2rem] border-r md:border border-white/[0.03] shadow-lg relative z-20 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
-        <div onClick={() => setActiveWorkspace('Home')} className="w-11 h-11 bg-[#d3f55b] rounded-[14px] flex items-center justify-center -skew-x-6 shadow-[0_0_20px_rgba(211,245,91,0.25)] cursor-pointer hover:scale-105 transition-transform">
-          <span className="text-[#0a0a0c] font-black text-2xl italic">S</span>
+      <nav className={`w-[72px] flex-col items-center gap-5 py-6 flex-shrink-0 bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] md:rounded-3xl  border-transparent dark:border-white/5 shadow-lg relative z-20 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
+        <div onClick={() => setActiveWorkspace('Home')} className="w-11 h-11 bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-2xl flex items-center justify-center -skew-x-6 shadow-[0_12px_24px_rgba(0,86,210,0.2)] dark:shadow-[0_12px_24px_rgba(211,245,91,0.2)] cursor-pointer hover:scale-105 transition-transform">
+          <span className="text-[#191c1e] dark:text-white font-black text-2xl italic">S</span>
         </div>
         
         <div className="w-6 h-px bg-white/10 my-1" />
         
         <div className="flex flex-col gap-3 flex-1 overflow-y-auto w-full items-center custom-scrollbar">
           {['Work', 'ICG', 'SP', 'BFF', 'MJ', 'GI'].map((lbl) => (
-            <div key={lbl} onClick={() => setActiveWorkspace(lbl)} className={`w-11 h-11 rounded-[1.2rem] flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all ${activeWorkspace === lbl ? 'bg-[#d3f55b] text-[#0a0a0c] shadow-[0_8px_20px_rgba(211,245,91,0.2)]' : 'bg-[#2a2b30] text-white/80 hover:bg-[#34353a] hover:text-white hover:rounded-[0.9rem]'}`}>
+            <div key={lbl} onClick={() => setActiveWorkspace(lbl)} className={`w-11 h-11 rounded-2xl flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all ${activeWorkspace === lbl ? 'bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white shadow-[0_8px_20px_rgba(0,86,210,0.15)] dark:shadow-[0_8px_20px_rgba(211,245,91,0.15)]' : 'bg-[#f2f4f6] dark:bg-[#1a1b22] text-[#191c1e]/80 dark:text-white/80 hover:bg-[#e0e3e5] dark:bg-[#18191e] hover:text-[#191c1e] dark:text-white hover:rounded-xl'}`}>
               {lbl}
             </div>
           ))}
         </div>
         
-        <button onClick={() => setShowSettingsModal(true)} className="w-11 h-11 rounded-[1.2rem] bg-white/[0.03] text-white/60 flex items-center justify-center hover:bg-white/10 hover:text-white hover:rounded-[0.9rem] transition-all border border-white/[0.05]">
+        <button onClick={() => setShowSettingsModal(true)} className="w-11 h-11 rounded-2xl bg-white/[0.03] text-[#191c1e]/60 dark:text-white/60 flex items-center justify-center hover:bg-white/10 hover:text-[#191c1e] dark:text-white hover:rounded-xl transition-all border border-transparent dark:border-white/5">
           <Settings className="w-5 h-5" />
         </button>
-        <button onClick={() => showToast("Add Workspace dialog opened", "global")} className="w-12 h-12 rounded-full bg-[#d3f55b] text-[#0a0a0c] flex items-center justify-center shadow-[0_0_15px_rgba(211,245,91,0.3)] transform transition-transform hover:scale-110 mt-2">
+        <button onClick={() => showToast("Add Workspace dialog opened", "global")} className="w-12 h-12 rounded-full bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white flex items-center justify-center shadow-[0_8px_16px_rgba(0,86,210,0.2)] dark:shadow-[0_8px_16px_rgba(211,245,91,0.2)] transform transition-transform hover:scale-110 mt-2">
           <Plus className="w-6 h-6" />
         </button>
       </nav>
 
       {/* 2. Messages Sidebar */}
-      <aside className={`flex-1 md:w-[300px] md:flex-shrink-0 flex-col h-full bg-[#121318] md:rounded-[2rem] overflow-hidden shadow-xl md:border border-white/[0.03] relative z-10 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
-         <div className="p-6 pb-4 border-b border-white/[0.04]">
+      <aside className={`flex-1 md:w-[300px] md:flex-shrink-0 flex-col h-full bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] md:rounded-3xl overflow-hidden shadow-xl border-transparent dark:border-white/5 relative z-10 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
+         <div className="p-6 pb-4 border-transparent dark:border-white/5">
             <div className="flex items-center gap-3 mb-5">
-               <h2 className="font-bold text-[22px] text-white tracking-tight">Messages</h2>
-               <span className="bg-[#d3f55b] text-[#0a0a0c] text-[10px] font-bold px-2.5 py-0.5 rounded-full">{dmUsers.length + 1}</span>
+               <h2 className="font-bold text-[22px] text-[#191c1e] dark:text-white tracking-tight">Messages</h2>
+               <span className="bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full">{dmUsers.length + 1}</span>
             </div>
             <div className="relative">
-               <Search className="w-4 h-4 absolute left-3.5 top-[13px] text-white/30" />
+               <Search className="w-4 h-4 absolute left-3.5 top-[13px] text-[#191c1e]/40 dark:text-white/40" />
                <input type="text" placeholder="Search users..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full bg-[#1a1b22] border border-white/[0.04] rounded-[14px] pl-10 pr-8 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#d3f55b]/50 transition-all shadow-inner placeholder-white/30" />
+                  className="w-full bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 rounded-2xl pl-10 pr-8 py-2.5 text-sm text-[#191c1e] dark:text-white focus:outline-none focus:ring-1 focus:ring-[#0056d2] dark:ring-[#d3f55b]/50 transition-all shadow-inner placeholder-white/30" />
                {searchQuery && (
-                 <button onClick={() => { setSearchQuery(""); setSearchResults([]); }} className="absolute right-3.5 top-[14px] text-white/40 hover:text-white">
+                 <button onClick={() => { setSearchQuery(""); setSearchResults([]); }} className="absolute right-3.5 top-[14px] text-[#191c1e]/50 dark:text-white/50 hover:text-[#191c1e] dark:text-white">
                    <X className="w-3.5 h-3.5" />
                  </button>
                )}
@@ -590,20 +643,20 @@ export default function Home() {
          </div>
 
          {searchQuery && (
-           <div className="absolute left-6 right-6 top-[125px] bg-[#1a1b22] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden">
+           <div className="absolute left-6 right-6 top-[125px] bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 rounded-2xl shadow-2xl z-50 overflow-hidden">
              {searchResults.length > 0 ? searchResults.map(p => (
                <button key={p.id} onClick={() => openDm(p)}
-                 className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#d3f55b]/10 transition-colors text-left group">
-                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm border border-white/5">
+                 className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/10 transition-colors text-left group">
+                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm border border-transparent dark:border-white/5">
                    {p.username[0].toUpperCase()}
                  </div>
                  <div>
-                   <p className="text-sm font-bold truncate text-white">{p.username}</p>
-                   <p className="text-[11px]">{onlineUserIds.has(p.id) ? <span className="text-[#d3f55b] font-medium">Online</span> : <span className="text-white/30">Offline</span>}</p>
+                   <p className="text-sm font-bold truncate text-[#191c1e] dark:text-white">{p.username}</p>
+                   <p className="text-[11px]">{onlineUserIds.has(p.id) ? <span className="text-[#0056d2] dark:text-[#d3f55b] font-medium">Online</span> : <span className="text-[#191c1e]/40 dark:text-white/40">Offline</span>}</p>
                  </div>
                </button>
              )) : (
-               <p className="px-4 py-4 text-sm text-white/40 text-center font-medium">No users found</p>
+               <p className="px-4 py-4 text-sm text-[#191c1e]/50 dark:text-white/50 text-center font-medium">No users found</p>
              )}
            </div>
          )}
@@ -621,9 +674,9 @@ export default function Home() {
                 <NavItem 
                    key={u.id}
                    icon={
-                      <div className="w-full h-full flex items-center justify-center text-sm font-bold relative text-white">
+                      <div className="w-full h-full flex items-center justify-center text-sm font-bold relative text-[#191c1e] dark:text-white">
                          {u.username[0].toUpperCase()}
-                         {onlineUserIds.has(u.id) && <span className="absolute -bottom-0.5 -right-0.5 w-[10px] h-[10px] bg-[#d3f55b] rounded-full border-[2px] border-[#16171b]" />}
+                         {onlineUserIds.has(u.id) && <span className="absolute -bottom-0.5 -right-0.5 w-[10px] h-[10px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full border-[2px] border-[#16171b]" />}
                       </div>
                    }
                    label={u.username} 
@@ -635,51 +688,55 @@ export default function Home() {
              ))}
          </div>
 
-         <div className="p-4 border-t border-white/[0.03] bg-[#121318] mt-auto flex items-center gap-3">
-             <div onClick={() => setShowSettingsModal(true)} className="w-10 h-10 rounded-[14px] bg-[#d3f55b] flex items-center justify-center text-sm font-black text-[#0a0a0c] flex-shrink-0 shadow-[0_0_15px_rgba(211,245,91,0.2)] cursor-pointer hover:scale-105 transition-all">
+         <div className="p-4 border-transparent dark:border-white/5 bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] mt-auto flex items-center gap-3">
+             <div onClick={() => setShowSettingsModal(true)} className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] flex items-center justify-center text-sm font-black text-[#191c1e] dark:text-white flex-shrink-0 shadow-[0_8px_16px_rgba(0,86,210,0.15)] dark:shadow-[0_8px_16px_rgba(211,245,91,0.15)] cursor-pointer hover:scale-105 transition-all">
                  {myProfile.username[0].toUpperCase()}
              </div>
              <div className="flex-1 min-w-0">
-                 <p className="text-sm font-bold text-white truncate">{myProfile.username}</p>
-                 <p className="text-[11px] text-white/50 flex items-center gap-1.5 font-medium"><Circle className="w-1.5 h-1.5 fill-[#d3f55b] text-[#d3f55b]" /> Online</p>
+                 <p className="text-sm font-bold text-[#191c1e] dark:text-white truncate">{myProfile.username}</p>
+                 <p className="text-[11px] text-[#191c1e]/60 dark:text-white/60 flex items-center gap-1.5 font-medium"><Circle className="w-1.5 h-1.5 fill-[#d3f55b] text-[#0056d2] dark:text-[#d3f55b]" /> Online</p>
              </div>
-             <button onClick={handleSignOut} title="Sign out" className="p-2.5 rounded-xl bg-[#1a1b22] hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-all border border-white/5 hover:border-red-500/30">
+             <button onClick={handleSignOut} title="Sign out" className="p-2.5 rounded-xl bg-[#f2f4f6] dark:bg-[#1a1b22] hover:bg-red-500/10 text-[#191c1e]/50 dark:text-white/50 hover:text-red-400 transition-all border border-transparent dark:border-white/5 hover:border-red-500/30">
                  <LogOut className="w-4 h-4" />
              </button>
          </div>
       </aside>
 
       {/* 3. Main Chat Area */}
-      <main className={`flex-1 flex-col min-w-0 bg-[#0a0a0c] relative z-0 ${mobileMenuOpen ? 'hidden md:flex' : 'flex'}`}>
+      <main className={`flex-1 flex-col min-w-0 bg-[#f7f9fb] dark:bg-[#0a0a0c] relative z-0 ${mobileMenuOpen ? 'hidden md:flex' : 'flex'}`}>
          <header className="flex h-[60px] md:h-[80px] items-center gap-3 md:gap-4 px-4 md:px-8 shrink-0">
-             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 -ml-2 text-white/70 hover:text-white">
+             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 -ml-2 text-[#191c1e]/80 dark:text-white/80 hover:text-[#191c1e] dark:text-white">
                 <Menu className="w-6 h-6" />
              </button>
-             <h2 className="text-[20px] md:text-[25px] font-bold tracking-tight text-white/95">{chatTitle}</h2>
+             <h2 className="text-[20px] md:text-[25px] font-bold tracking-tight text-[#191c1e] dark:text-white">{chatTitle}</h2>
              <div className="ml-auto flex items-center gap-2 md:gap-3">
                  <div className="relative hidden md:block w-48">
-                     <Search className="w-4 h-4 absolute left-4 top-2.5 text-white/30" />
-                     <input type="text" placeholder="Search files/messages..." className="w-full bg-[#121318] border border-white/[0.04] rounded-full pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-[#d3f55b]/50 shadow-inner" />
+                     <Search className="w-4 h-4 absolute left-4 top-2.5 text-[#191c1e]/40 dark:text-white/40" />
+                     <input type="text" placeholder="Search files/messages..." className="w-full bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] border border-transparent dark:border-white/5 rounded-full pl-10 pr-4 py-2 text-sm text-[#191c1e] dark:text-white focus:outline-none focus:border-[#d3f55b]/50 shadow-inner" />
                  </div>
                  
-                 <button onClick={() => setShowRightPanel(!showRightPanel)} className={`hidden md:block p-2.5 border border-white/[0.04] rounded-full transition-colors shadow-sm ml-1 ${showRightPanel ? 'bg-[#d3f55b]/20 text-[#d3f55b] border-[#d3f55b]/30' : 'bg-[#121318] text-white/70 hover:bg-white/10'}`}>
-                    <UsersIcon className="w-[18px] h-[18px]" />
+                 <button onClick={() => setShowRightPanel(!showRightPanel)} className={`hidden md:block p-2.5 border border-transparent dark:border-white/5 rounded-full transition-colors shadow-sm ml-1 ${showRightPanel ? 'bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-white dark:text-black border-transparent' : 'bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] text-[#191c1e] dark:text-white hover:bg-black/5 dark:hover:bg-white/10'}`}>
+                    <UsersIcon className={`w-[18px] h-[18px] ${showRightPanel ? 'text-white dark:text-black' : ''}`} strokeWidth={showRightPanel ? 2.5 : 2} />
                  </button>
                  
-                 <button onClick={() => showToast("You have 0 new notifications", "global")} className="p-2.5 bg-[#121318] border border-white/[0.04] rounded-full hover:bg-white/10 transition-colors shadow-sm"><Bell className="w-[18px] h-[18px] text-white/70" /></button>
+                 <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-2.5 bg-[#ffffff] dark:bg-[#121318] border border-transparent dark:border-white/5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)]">
+                    {theme === 'dark' ? <Sun className="w-[18px] h-[18px] text-[#191c1e] dark:text-white" /> : <Moon className="w-[18px] h-[18px] text-[#191c1e] dark:text-white" />}
+                 </button>
                  
-                 <div onClick={() => setShowSettingsModal(true)} className="w-[34px] h-[34px] md:w-[38px] md:h-[38px] rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-[13px] font-bold ml-1 md:ml-2 shadow-sm border border-white/10 cursor-pointer overflow-hidden transform transition-transform hover:scale-105 ring-2 ring-transparent hover:ring-[#d3f55b]/50">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${myProfile.username}`} alt="me" className="w-full h-full object-cover bg-[#d3f55b]/10" />
+                 <button onClick={() => showToast("You have 0 new notifications", "global")} className="p-2.5 bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] border border-transparent dark:border-white/5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors shadow-sm"><Bell className="w-[18px] h-[18px] text-[#191c1e] dark:text-white" /></button>
+                 
+                 <div onClick={() => setShowSettingsModal(true)} className="w-[34px] h-[34px] md:w-[38px] md:h-[38px] rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-[13px] font-bold ml-1 md:ml-2 shadow-sm border border-transparent dark:border-white/5 cursor-pointer overflow-hidden transform transition-transform hover:scale-105 ring-2 ring-transparent hover:ring-[#0056d2] dark:ring-[#d3f55b]/50">
+                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${myProfile.username}`} alt="me" className="w-full h-full object-cover bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/10" />
                  </div>
              </div>
          </header>
 
          {/* Chat Box */}
-         <div className="flex-1 bg-[#16171d] md:rounded-[2.5rem] rounded-t-[2rem] md:mx-2 md:mb-2 flex flex-col overflow-hidden shadow-2xl relative border border-white/[0.03]">
+         <div className="flex-1 bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] md:rounded-[2.5rem] rounded-t-[2rem] md:mx-2 md:mb-2 flex flex-col overflow-hidden shadow-2xl relative border border-transparent dark:border-white/5">
              
              {/* Banner */}
              {selectedChat === 'global' && (
-               <div className="h-[220px] shrink-0 relative m-4 rounded-[2rem] overflow-hidden z-10 shadow-lg border border-white/[0.04]">
+               <div className="h-[220px] shrink-0 relative m-4 rounded-3xl overflow-hidden z-10 shadow-lg border border-transparent dark:border-white/5">
                  <img onClick={() => setLightboxImage("https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=2000&auto=format&fit=crop")} src="https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=2000&auto=format&fit=crop" className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-700" alt="Banner" />
                  <div className="absolute inset-0 bg-gradient-to-t from-[#16171d] via-[#16171d]/20 to-transparent opacity-90 pointer-events-none" />
                </div>
@@ -690,14 +747,14 @@ export default function Home() {
                 {activeMsgs.length >= 80 && (
                   <div className="flex justify-center mb-6">
                     <button onClick={loadMore} disabled={loadingMore}
-                      className="text-xs font-bold px-5 py-2.5 rounded-full border border-white/10 bg-[#212229] hover:bg-[#282a33] text-white/60 hover:text-white transition-all shadow-md">
+                      className="text-xs font-bold px-5 py-2.5 rounded-full border border-transparent dark:border-white/5 bg-[#f2f4f6] dark:bg-[#1a1b22] hover:bg-[#282a33] text-[#191c1e]/60 dark:text-white/60 hover:text-[#191c1e] dark:text-white transition-all shadow-md">
                       {loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Load older messages"}
                     </button>
                   </div>
                 )}
                 {activeMsgs.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-white/20 gap-4">
-                    <Sparkles className="w-12 h-12 opacity-40 text-[#d3f55b]" />
+                  <div className="h-full flex flex-col items-center justify-center text-[#191c1e]/30 dark:text-white/30 gap-4">
+                    <Sparkles className="w-12 h-12 opacity-40 text-[#0056d2] dark:text-[#d3f55b]" />
                     <p className="text-[15px] font-medium">No messages yet — start the conversation!</p>
                   </div>
                 ) : activeMsgs.map((msg, idx) => {
@@ -711,7 +768,7 @@ export default function Home() {
                     <React.Fragment key={msg.id}>
                       {showDate && (
                         <div className="flex justify-center my-8">
-                            <span className="bg-[#212228]/80 border border-white/5 backdrop-blur-md text-white/50 text-[10px] font-bold px-4 py-1.5 rounded-full tracking-widest uppercase shadow-sm">
+                            <span className="bg-[#f2f4f6] dark:bg-[#1a1b22]/80 border border-transparent dark:border-white/5 backdrop-blur-md text-[#191c1e]/60 dark:text-white/60 text-[10px] font-bold px-4 py-1.5 rounded-full tracking-widest uppercase shadow-sm">
                               {formatDateString(msg.created_at)}
                             </span>
                         </div>
@@ -720,7 +777,7 @@ export default function Home() {
                       <div className={`flex gap-3.5 group mt-${grouped ? '1' : '6'} px-4 hover:bg-white/[0.015] py-1.5 -mx-4 rounded-2xl transition-colors`}>
                         <div className="w-10 flex-shrink-0 flex justify-center mt-0.5">
                           {!grouped && (
-                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#2a2b30] to-[#121318] flex items-center justify-center text-sm font-bold text-white shadow-sm ring-1 ring-white/10 relative overflow-hidden cursor-pointer" onClick={() => openDm({id: msg.user_id, username: msg.username})}>
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#2a2b30] to-[#121318] flex items-center justify-center text-sm font-bold text-[#191c1e] dark:text-white shadow-sm ring-1 ring-white/10 relative overflow-hidden cursor-pointer" onClick={() => openDm({id: msg.user_id, username: msg.username})}>
                                 <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${msg.username}`} alt="avatar" className="w-full h-full object-cover hover:scale-110 transition-transform" />
                               </div>
                           )}
@@ -729,25 +786,25 @@ export default function Home() {
                         <div className="flex-1 min-w-0 pb-1">
                           {!grouped && (
                             <div className="flex items-baseline gap-2.5 mb-1.5">
-                              <span className="font-bold text-white/95 text-[15px] leading-none cursor-pointer hover:underline decoration-white/30" onClick={() => openDm({id: msg.user_id, username: msg.username})}>{msg.username}</span>
-                              <span className="text-[11px] text-white/30 font-medium tracking-wide">{formatTime(msg.created_at)}</span>
+                              <span className="font-bold text-[#191c1e] dark:text-white text-[15px] leading-none cursor-pointer hover:underline decoration-white/30" onClick={() => openDm({id: msg.user_id, username: msg.username})}>{msg.username}</span>
+                              <span className="text-[11px] text-[#191c1e]/40 dark:text-white/40 font-medium tracking-wide">{formatTime(msg.created_at)}</span>
                             </div>
                           )}
                           
-                          <div className={`text-[14px] text-white/80 leading-relaxed max-w-[85%]`}>
+                          <div className={`text-[14px] text-[#191c1e]/80 dark:text-white/80 leading-relaxed max-w-[85%]`}>
                               {msg.file_url && msg.file_type?.startsWith("image/") && (
                                 <div onClick={() => setLightboxImage(msg.file_url!)} className="cursor-pointer inline-block">
                                   <img src={msg.file_url} alt={msg.file_name ?? "image"}
-                                    className="max-w-[300px] max-h-72 object-cover rounded-2xl border border-white/5 shadow-md mb-2 block hover:brightness-110 transition-all" />
+                                    className="max-w-[300px] max-h-72 object-cover rounded-2xl border border-transparent dark:border-white/5 shadow-md mb-2 block hover:brightness-110 transition-all" />
                                 </div>
                               )}
                               {msg.file_url && !msg.file_type?.startsWith("image/") && (
                                 <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-3 px-4 py-3.5 bg-[#212228] border border-white/5 rounded-[1rem] hover:bg-[#2a2b33] transition-all mb-2 shadow-sm focus:ring-2 focus:ring-[#d3f55b]/50">
-                                  <div className="p-2.5 bg-[#d3f55b]/10 text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>
+                                  className="inline-flex items-center gap-3 px-4 py-3.5 bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 rounded-[1rem] hover:bg-[#f2f4f6] dark:bg-[#1a1b22] transition-all mb-2 shadow-sm focus:ring-2 focus:ring-[#0056d2] dark:ring-[#d3f55b]/50">
+                                  <div className="p-2.5 bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/10 text-[#0056d2] dark:text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>
                                   <div className="min-w-0 max-w-[200px]">
-                                    <span className="text-[13px] font-bold truncate block pr-2 text-white/95">{msg.file_name ?? "File attachment"}</span>
-                                    <span className="text-[11px] text-white/40 font-medium">Click to open</span>
+                                    <span className="text-[13px] font-bold truncate block pr-2 text-[#191c1e] dark:text-white">{msg.file_name ?? "File attachment"}</span>
+                                    <span className="text-[11px] text-[#191c1e]/50 dark:text-white/50 font-medium">Click to open</span>
                                   </div>
                                 </a>
                               )}
@@ -759,7 +816,7 @@ export default function Home() {
 
                         {msg.user_id === myProfile.id && (
                           <div className="flex items-start opacity-0 group-hover:opacity-100 transition-opacity pr-2 pt-1">
-                            <button onClick={() => handleDelete(msg)} className="p-2 hover:bg-red-500/10 text-red-400/50 hover:text-red-400 rounded-xl transition-colors border border-transparent hover:border-red-500/20">
+                            <button onClick={() => handleDelete(msg)} className="p-2 hover:bg-red-500/10 text-red-400/50 hover:text-red-400 rounded-xl transition-colors border border-transparent dark:border-white/5 hover:border-red-500/20">
                                 <Trash2 className="w-[15px] h-[15px]" />
                             </button>
                           </div>
@@ -774,13 +831,13 @@ export default function Home() {
              {/* Typing Indicator */}
              {typingUsers[selectedChat] && typingUsers[selectedChat].size > 0 && (
                 <div className="px-10 py-1 bg-gradient-to-t from-[#16171d] via-[#16171d] to-transparent absolute bottom-[90px] w-full z-10 pointer-events-none">
-                  <span className="text-[12px] text-[#d3f55b] font-bold animate-pulse flex items-center gap-1.5 drop-shadow-md">
+                  <span className="text-[12px] text-[#0056d2] dark:text-[#d3f55b] font-bold animate-pulse flex items-center gap-1.5 drop-shadow-md">
                     <span className="flex gap-0.5">
-                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce [animation-delay:-0.3s]" />
-                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce [animation-delay:-0.15s]" />
-                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce" />
+                      <span className="w-[5px] h-[5px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full animate-bounce [animation-delay:-0.3s]" />
+                      <span className="w-[5px] h-[5px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full animate-bounce [animation-delay:-0.15s]" />
+                      <span className="w-[5px] h-[5px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full animate-bounce" />
                     </span>
-                    <span className="text-white/70 font-medium ml-1">
+                    <span className="text-[#191c1e]/80 dark:text-white/80 font-medium ml-1">
                       {Array.from(typingUsers[selectedChat]).join(", ")} {typingUsers[selectedChat].size === 1 ? "is" : "are"} typing...
                     </span>
                   </span>
@@ -790,22 +847,22 @@ export default function Home() {
              {/* Input Container */}
              <div className="p-5 z-20 pb-5">
                 {attachFile && (
-                  <div className="mx-2 mb-3 flex items-center gap-4 bg-[#2a2b33] border border-white/5 rounded-2xl px-5 py-3 shadow-lg w-max max-w-[80%]">
+                  <div className="mx-2 mb-3 flex items-center gap-4 bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 rounded-2xl px-5 py-3 shadow-lg w-max max-w-[80%]">
                     {attachPreview
                       ? <img onClick={() => setLightboxImage(attachPreview)} src={attachPreview} alt="preview" className="w-[42px] h-[42px] object-cover rounded-[12px] flex-shrink-0 shadow-sm cursor-pointer hover:brightness-110" />
-                      : <div className="p-2.5 bg-[#d3f55b]/20 text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>}
+                      : <div className="p-2.5 bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/20 text-[#0056d2] dark:text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>}
                     <div className="flex-1 min-w-0 pr-4">
-                      <p className="text-[13px] font-bold text-white truncate">{attachFile.name}</p>
-                      <p className="text-[11px] text-white/40 font-medium">{(attachFile.size / 1024).toFixed(1)} KB</p>
+                      <p className="text-[13px] font-bold text-[#191c1e] dark:text-white truncate">{attachFile.name}</p>
+                      <p className="text-[11px] text-[#191c1e]/50 dark:text-white/50 font-medium">{(attachFile.size / 1024).toFixed(1)} KB</p>
                     </div>
-                    <button type="button" onClick={clearAttach} className="text-white/40 hover:text-white p-1.5 hover:bg-white/10 rounded-full transition-all">
+                    <button type="button" onClick={clearAttach} className="text-[#191c1e]/50 dark:text-white/50 hover:text-[#191c1e] dark:text-white p-1.5 hover:bg-white/10 rounded-full transition-all">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
                 )}
-                <form onSubmit={handleSend} className="flex items-center gap-1 md:gap-2 bg-[#212229] border border-white/[0.04] rounded-full px-2 py-2 shadow-inner transition-all hover:bg-[#25262e] focus-within:ring-1 focus-within:ring-[#d3f55b]/50 md:mx-2 focus-within:border-[#d3f55b]/30">
+                <form onSubmit={handleSend} className="flex items-center gap-1 md:gap-2 bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 rounded-full px-2 py-2 shadow-inner transition-all hover:bg-[#e0e3e5] dark:bg-[#18191e] focus-within:ring-1 focus-within:ring-[#0056d2] dark:ring-[#d3f55b]/50 md:mx-2 focus-within:border-[#d3f55b]/30">
                      <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.zip" onChange={handleFileChange} className="hidden" />
-                     <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 rounded-full text-white/40 hover:text-[#d3f55b] hover:bg-[#d3f55b]/10 transition-all flex-shrink-0 ml-1">
+                     <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 rounded-full text-[#191c1e]/50 dark:text-white/50 hover:text-[#0056d2] dark:text-[#d3f55b] hover:bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38]/10 transition-all flex-shrink-0 ml-1">
                         <Paperclip className="w-[18px] h-[18px]" />
                      </button>
                      <input type="text" value={input} 
@@ -825,13 +882,13 @@ export default function Home() {
                           }
                         }}
                         placeholder="Write a message..." autoComplete="off"
-                        className="flex-1 bg-transparent py-2.5 px-2 text-white placeholder-white/30 focus:outline-none text-[14px] font-medium" />
+                        className="flex-1 bg-transparent py-2.5 px-2 text-[#191c1e] dark:text-white placeholder-white/30 focus:outline-none text-[14px] font-medium" />
                      
                      <div className="flex items-center gap-1 pr-1">
-                       <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 text-white/40 hover:text-white transition-all rounded-full hover:bg-white/5"><ImageIcon className="w-[18px] h-[18px]" /></button>
+                       <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 text-[#191c1e]/50 dark:text-white/50 hover:text-[#191c1e] dark:text-white transition-all rounded-full hover:bg-white/5"><ImageIcon className="w-[18px] h-[18px]" /></button>
                        <button type="submit" disabled={(!input.trim() && !attachFile) || sendLoading}
-                         className="bg-[#d3f55b] hover:bg-[#cbf141] disabled:bg-white/5 disabled:text-white/20 text-[#0a0a0c] w-[42px] h-[42px] rounded-full flex items-center justify-center transition-all flex-shrink-0 shadow-[0_4px_12px_rgba(211,245,91,0.2)] disabled:shadow-none ml-1 transform active:scale-95 disabled:active:scale-100">
-                         {sendLoading ? <Loader2 className="w-[18px] h-[18px] animate-spin" /> : <Send className="w-[18px] h-[18px] ml-0.5" />}
+                         className="bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] hover:opacity-90 disabled:bg-black/5 disabled:dark:bg-white/5 disabled:text-[#191c1e]/30 dark:disabled:text-white/30 text-white dark:text-black w-[42px] h-[42px] rounded-full flex items-center justify-center transition-all flex-shrink-0 shadow-[0_4px_12px_rgba(0,86,210,0.2)] dark:shadow-[0_4px_12px_rgba(211,245,91,0.2)] disabled:shadow-none ml-1 transform active:scale-95 disabled:active:scale-100">
+                         {sendLoading ? <Loader2 className="w-[18px] h-[18px] animate-spin text-white dark:text-black" strokeWidth={2.5} /> : <Send className="w-[18px] h-[18px] ml-0.5 text-white dark:text-black" strokeWidth={2.5} />}
                        </button>
                      </div>
                 </form>
@@ -841,8 +898,8 @@ export default function Home() {
          {toast && (
            <div className="absolute top-24 right-10 z-[60] animate-in fade-in slide-in-from-right-4 duration-300">
              <button onClick={() => { setSelectedChat(toast.channel); setUnreadCounts(prev => ({ ...prev, [toast.channel]: 0 })); setToast(null); }}
-               className="bg-[#d3f55b] text-[#0a0a0c] px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 hover:brightness-110 transition-all active:scale-95 group font-bold">
-               <div className="bg-[#0a0a0c]/10 p-2 rounded-xl">
+               className="bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 hover:brightness-110 transition-all active:scale-95 group font-bold">
+               <div className="bg-[#f7f9fb] dark:bg-[#0a0a0c]/10 p-2 rounded-xl">
                  <MessageSquare className="w-[18px] h-[18px]" />
                </div>
                <div className="text-left pr-4">
@@ -858,29 +915,29 @@ export default function Home() {
       {showRightPanel && (
       <aside className="w-[310px] hidden xl:flex flex-col gap-4 py-2 pr-1 flex-shrink-0 h-full relative z-10 animate-in slide-in-from-right-10 duration-300">
          <div className="flex justify-between items-center px-1 pt-1.5 shrink-0">
-            <button onClick={() => setActiveCall(activeCall === 'audio' ? null : 'audio')} className={`w-[52px] h-[52px] rounded-[1.2rem] flex items-center justify-center shadow-[0_6px_20px_rgba(211,245,91,0.25)] hover:scale-105 transition-all ${activeCall === 'audio' ? 'bg-red-500 text-white shadow-red-500/30' : 'bg-[#d3f55b] text-[#0a0a0c]'}`}><Phone className={`w-[20px] h-[20px] ${activeCall === 'audio' ? 'rotate-[135deg]' : ''}`} /></button>
-            <button onClick={() => setActiveCall(activeCall === 'video' ? null : 'video')} className={`w-[52px] h-[52px] rounded-[1.2rem] flex items-center justify-center transition-all border shadow-md hover:scale-105 ${activeCall === 'video' ? 'bg-red-500 text-white border-red-500 shadow-red-500/30' : 'bg-[#1a1b22] text-white/70 border-white/5 hover:bg-white/10 hover:text-white'}`}><Video className="w-[20px] h-[20px]" /></button>
-            <button onClick={() => showToast("Chat pinned to favorites", "global")} className="w-[52px] h-[52px] rounded-[1.2rem] bg-[#1a1b22] text-white/70 flex items-center justify-center hover:bg-white/10 hover:text-white transition-all border border-white/5 shadow-md active:scale-95"><Pin className="w-[20px] h-[20px]" /></button>
-            <button onClick={() => setShowRightPanel(false)} className="w-[52px] h-[52px] rounded-[1.2rem] bg-[#1a1b22] text-[#d3f55b] flex items-center justify-center hover:bg-white/10 transition-all border border-[#d3f55b]/50 shadow-md ring-1 ring-[#d3f55b]/20 active:scale-95"><UsersIcon className="w-[20px] h-[20px]" /></button>
+            <button onClick={() => setActiveCall(activeCall === 'audio' ? null : 'audio')} className={`w-[52px] h-[52px] rounded-2xl flex items-center justify-center shadow-[0_6px_20px_rgba(211,245,91,0.25)] hover:scale-105 transition-all ${activeCall === 'audio' ? 'bg-red-500 text-[#191c1e] dark:text-white shadow-red-500/30' : 'bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white'}`}><Phone className={`w-[20px] h-[20px] ${activeCall === 'audio' ? 'rotate-[135deg]' : ''}`} /></button>
+            <button onClick={() => setActiveCall(activeCall === 'video' ? null : 'video')} className={`w-[52px] h-[52px] rounded-2xl flex items-center justify-center transition-all border shadow-md hover:scale-105 ${activeCall === 'video' ? 'bg-red-500 text-[#191c1e] dark:text-white border-red-500 shadow-red-500/30' : 'bg-[#f2f4f6] dark:bg-[#1a1b22] text-[#191c1e]/80 dark:text-white/80 border-transparent dark:border-white/5 hover:bg-white/10 hover:text-[#191c1e] dark:text-white'}`}><Video className="w-[20px] h-[20px]" /></button>
+            <button onClick={togglePin} disabled={selectedChat === "global"} className={`w-[52px] h-[52px] rounded-2xl flex items-center justify-center transition-all border shadow-md active:scale-95 ${pinnedChats.has(selectedChat) ? 'bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white border-[#d3f55b]/50' : 'bg-[#f2f4f6] dark:bg-[#1a1b22] text-[#191c1e]/80 dark:text-white/80 hover:bg-white/10 hover:text-[#191c1e] dark:text-white border-transparent dark:border-white/5 disabled:opacity-50 disabled:cursor-not-allowed'}`}><Pin className="w-[20px] h-[20px]" /></button>
+            <button onClick={() => setShowRightPanel(false)} className="w-[52px] h-[52px] rounded-2xl bg-[#f2f4f6] dark:bg-[#1a1b22] text-[#0056d2] dark:text-[#d3f55b] flex items-center justify-center hover:bg-white/10 transition-all border border-[#d3f55b]/50 shadow-md ring-1 ring-[#0056d2] dark:ring-[#d3f55b]/20 active:scale-95"><UsersIcon className="w-[20px] h-[20px]" /></button>
          </div>
          
-         <div className="bg-[#121318] rounded-[2rem] p-6 border border-white/[0.03] flex-1 overflow-y-auto mt-2 custom-scrollbar shadow-lg">
-            <h3 className="text-white/95 font-bold text-[17px] mb-5 tracking-tight flex items-center justify-between">
+         <div className="bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] rounded-3xl p-6 border border-transparent dark:border-white/5 flex-1 overflow-y-auto mt-2 custom-scrollbar shadow-lg">
+            <h3 className="text-[#191c1e] dark:text-white font-bold text-[17px] mb-5 tracking-tight flex items-center justify-between">
                Members
-               <span className="text-[11px] text-white/40 bg-white/5 px-2 py-0.5 rounded-full font-medium">{onlineUserIds.size + 1} online</span>
+               <span className="text-[11px] text-[#191c1e]/50 dark:text-white/50 bg-white/5 px-2 py-0.5 rounded-full font-medium">{onlineUserIds.size + 1} online</span>
             </h3>
             <div className="space-y-4">
                {/* admin */}
                <div className="flex items-center gap-3.5 group cursor-pointer" onClick={() => showToast("Cannot DM Admin right now", "global")}>
-                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 group-hover:border-[#d3f55b]/50 transition-colors">
+                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-[#191c1e] dark:text-white relative border border-transparent dark:border-white/5 group-hover:border-[#d3f55b]/50 transition-colors">
                       <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Admin" className="w-full h-full p-1 group-hover:scale-110 transition-transform" alt="admin" />
-                      <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                      <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full border-[2.5px] border-[#121318]" />
                    </div>
                    <div className="flex flex-col">
-                      <span className="text-[14px] font-bold text-white/90 group-hover:text-white transition-colors">Richard Wilson</span>
-                      <span className="text-[11px] text-white/40 font-medium">Head of Design</span>
+                      <span className="text-[14px] font-bold text-[#191c1e] dark:text-white group-hover:text-[#191c1e] dark:text-white transition-colors">Richard Wilson</span>
+                      <span className="text-[11px] text-[#191c1e]/50 dark:text-white/50 font-medium">Head of Design</span>
                    </div>
-                   <span className="text-[9px] font-black text-[#0a0a0c] bg-[#d3f55b] ml-auto px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm group-hover:scale-110 transition-transform">Admin</span>
+                   <span className="text-[9px] font-black text-[#191c1e] dark:text-white bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] ml-auto px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm group-hover:scale-110 transition-transform">Admin</span>
                </div>
                
                {/* Map online users visually */}
@@ -888,13 +945,13 @@ export default function Home() {
                   const prof = uid === myProfile.id ? myProfile : dmUsers.find(d => d.id === uid) || { username: 'User' };
                   return (
                      <div key={uid} className="flex items-center gap-3.5 group cursor-pointer" onClick={() => uid !== myProfile.id ? openDm({id: uid, username: prof.username}) : showToast("This is you!", "global")}>
-                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 group-hover:border-[#d3f55b]/50 transition-colors overflow-hidden">
+                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-[#191c1e] dark:text-white relative border border-transparent dark:border-white/5 group-hover:border-[#d3f55b]/50 transition-colors overflow-hidden">
                             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${prof.username}`} className="w-full h-full scale-110 group-hover:scale-125 transition-transform" alt="avatar" />
-                            <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                            <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full border-[2.5px] border-[#121318]" />
                          </div>
                          <div className="flex flex-col">
-                           <span className="text-[14px] font-bold text-white/90 group-hover:underline">{prof.username} {uid === myProfile.id && <span className="text-white/30 font-medium ml-1 no-underline">(You)</span>}</span>
-                           <span className="text-[11px] text-white/40 font-medium text-ellipsis overflow-hidden whitespace-nowrap max-w-[120px]">
+                           <span className="text-[14px] font-bold text-[#191c1e] dark:text-white group-hover:underline">{prof.username} {uid === myProfile.id && <span className="text-[#191c1e]/40 dark:text-white/40 font-medium ml-1 no-underline">(You)</span>}</span>
+                           <span className="text-[11px] text-[#191c1e]/50 dark:text-white/50 font-medium text-ellipsis overflow-hidden whitespace-nowrap max-w-[120px]">
                               {messages[uid]?.[messages[uid].length-1]?.content || 'Online now'}
                            </span>
                          </div>
@@ -902,47 +959,47 @@ export default function Home() {
                   )
                }) : (
                  <div className="flex items-center gap-3.5 group cursor-pointer" onClick={() => showToast("This is you!", "global")}>
-                     <div className="w-10 h-10 rounded-full bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-white relative border border-white/10">
+                     <div className="w-10 h-10 rounded-full bg-[#f2f4f6] dark:bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-[#191c1e] dark:text-white relative border border-transparent dark:border-white/5">
                         {myProfile.username[0].toUpperCase()}
-                        <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                        <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] rounded-full border-[2.5px] border-[#121318]" />
                      </div>
-                     <span className="text-[14px] font-bold text-white/90">{myProfile.username} <span className="text-white/30 font-medium ml-1">(You)</span></span>
+                     <span className="text-[14px] font-bold text-[#191c1e] dark:text-white">{myProfile.username} <span className="text-[#191c1e]/40 dark:text-white/40 font-medium ml-1">(You)</span></span>
                  </div>
                )}
                {/* Some mocked offline users for styling */}
                <div className="flex items-center gap-3.5 group cursor-pointer opacity-50 hover:opacity-100 transition-opacity" onClick={() => showToast("User is offline. Cannot message right now.", "global")}>
-                   <div className="w-10 h-10 rounded-full bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 overflow-hidden">
+                   <div className="w-10 h-10 rounded-full bg-[#f2f4f6] dark:bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-[#191c1e] dark:text-white relative border border-transparent dark:border-white/5 overflow-hidden">
                       <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah" className="w-full h-full scale-110" alt="sarah" />
                    </div>
                    <div className="flex flex-col">
-                      <span className="text-[14px] font-bold text-white/90">Sarah Parker</span>
-                      <span className="text-[11px] text-white/40 font-medium">Offline</span>
+                      <span className="text-[14px] font-bold text-[#191c1e] dark:text-white">Sarah Parker</span>
+                      <span className="text-[11px] text-[#191c1e]/50 dark:text-white/50 font-medium">Offline</span>
                    </div>
                </div>
             </div>
          </div>
          
-         <div className="bg-[#121318] rounded-[2rem] p-6 border border-white/[0.03] shrink-0 shadow-lg">
-            <h3 className="text-white/95 font-bold text-[17px] mb-4 tracking-tight flex justify-between items-center group cursor-pointer" onClick={() => showToast("Opening Files Explorer", "global")}>
+         <div className="bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] rounded-3xl p-6 border border-transparent dark:border-white/5 shrink-0 shadow-lg">
+            <h3 className="text-[#191c1e] dark:text-white font-bold text-[17px] mb-4 tracking-tight flex justify-between items-center group cursor-pointer" onClick={() => showToast("Opening Files Explorer", "global")}>
               Files 
-              <ChevronRight className="w-4 h-4 text-white/30 group-hover:translate-x-1 group-hover:text-[#d3f55b] transition-all" />
+              <ChevronRight className="w-4 h-4 text-[#191c1e]/40 dark:text-white/40 group-hover:translate-x-1 group-hover:text-[#0056d2] dark:text-[#d3f55b] transition-all" />
             </h3>
-            <div onClick={() => showToast("Loading gallery...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-white/80 font-medium text-[13px] mb-3 group">
-               <div className="p-2 bg-[#1a1b22] group-hover:bg-[#d3f55b] group-hover:text-[black] rounded-[10px] transition-colors"><ImageIcon className="w-4 h-4 text-white/70 group-hover:text-black" /></div>
-               <span className="flex-1 text-white/90">115 photos</span>
-               <ChevronRight className="w-4 h-4 text-white/30" />
+            <div onClick={() => showToast("Loading gallery...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#f2f4f6] dark:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-[#191c1e]/80 dark:text-white/80 font-medium text-[13px] mb-3 group">
+               <div className="p-2 bg-[#f2f4f6] dark:bg-[#1a1b22] group-hover:bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] group-hover:text-[black] rounded-[10px] transition-colors"><ImageIcon className="w-4 h-4 text-[#191c1e]/80 dark:text-white/80 group-hover:text-black" /></div>
+               <span className="flex-1 text-[#191c1e] dark:text-white">115 photos</span>
+               <ChevronRight className="w-4 h-4 text-[#191c1e]/40 dark:text-white/40" />
             </div>
             <div className="grid grid-cols-2 gap-2 mb-2">
-               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#1a1b22] rounded-[14px] overflow-hidden shrink-0 border border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
-               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#1a1b22] rounded-[14px] overflow-hidden shrink-0 border border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
+               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#f2f4f6] dark:bg-[#1a1b22] rounded-2xl overflow-hidden shrink-0 border border-transparent dark:border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
+               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#f2f4f6] dark:bg-[#1a1b22] rounded-2xl overflow-hidden shrink-0 border border-transparent dark:border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
             </div>
             
             <div className="h-px bg-white/5 my-4" />
             
-            <div onClick={() => showToast("Loading documents...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-white/80 font-medium text-[13px] group">
-               <div className="p-2 bg-[#1a1b22] group-hover:bg-[#d3f55b] group-hover:text-black rounded-[10px] transition-colors"><FileText className="w-4 h-4 text-white/70 group-hover:text-black" /></div>
-               <span className="flex-1 text-white/90">208 files</span>
-               <ChevronRight className="w-4 h-4 text-white/30" />
+            <div onClick={() => showToast("Loading documents...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#f2f4f6] dark:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-[#191c1e]/80 dark:text-white/80 font-medium text-[13px] group">
+               <div className="p-2 bg-[#f2f4f6] dark:bg-[#1a1b22] group-hover:bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] group-hover:text-black rounded-[10px] transition-colors"><FileText className="w-4 h-4 text-[#191c1e]/80 dark:text-white/80 group-hover:text-black" /></div>
+               <span className="flex-1 text-[#191c1e] dark:text-white">208 files</span>
+               <ChevronRight className="w-4 h-4 text-[#191c1e]/40 dark:text-white/40" />
             </div>
          </div>
       </aside>
@@ -951,26 +1008,26 @@ export default function Home() {
       {/* Global Overlays & Modals */}
       {lightboxImage && (
         <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setLightboxImage(null)}>
-            <img src={lightboxImage} alt="Fullscreen" className="max-w-[90vw] max-h-[90vh] rounded-[2rem] border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.8)] object-contain" onClick={e => e.stopPropagation()} />
-            <button className="absolute top-8 right-8 p-3 bg-white/10 rounded-full hover:bg-white/20 hover:scale-110 transition-all text-white backdrop-blur-lg"><X className="w-6 h-6" /></button>
+            <img src={lightboxImage} alt="Fullscreen" className="max-w-[90vw] max-h-[90vh] rounded-3xl border border-transparent dark:border-white/5 shadow-[0_0_50px_rgba(0,0,0,0.8)] object-contain" onClick={e => e.stopPropagation()} />
+            <button className="absolute top-8 right-8 p-3 bg-white/10 rounded-full hover:bg-white/20 hover:scale-110 transition-all text-[#191c1e] dark:text-white backdrop-blur-lg"><X className="w-6 h-6" /></button>
         </div>
       )}
 
       {activeCall && (
-        <div className="fixed top-10 left-1/2 -translate-x-1/2 z-[80] bg-[#1a1b22]/90 backdrop-blur-xl border border-[#d3f55b]/30 pl-4 pr-6 py-4 rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-6 animate-in slide-in-from-top-10 duration-500">
+        <div className="fixed top-10 left-1/2 -translate-x-1/2 z-[80] bg-[#f2f4f6] dark:bg-[#1a1b22]/90 backdrop-blur-xl border border-[#d3f55b]/30 pl-4 pr-6 py-4 rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-6 animate-in slide-in-from-top-10 duration-500">
             <div className="flex -space-x-3 items-center">
                 <div className="w-[50px] h-[50px] rounded-full border-4 border-[#1a1b22] overflow-hidden bg-gray-800 z-20"><img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${myProfile.username}`} className="w-full h-full object-cover scale-110" /></div>
                 <div className="w-[50px] h-[50px] rounded-full border-4 border-[#1a1b22] overflow-hidden bg-gray-800 z-10"><img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=Admin`} className="w-full h-full object-cover scale-110 p-1" /></div>
             </div>
             <div>
-               <p className="text-white font-bold text-[15px]">{activeCall === 'video' ? 'Video' : 'Audio'} Call in progress</p>
+               <p className="text-[#191c1e] dark:text-white font-bold text-[15px]">{activeCall === 'video' ? 'Video' : 'Audio'} Call in progress</p>
                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="w-2 h-2 rounded-full bg-[#d3f55b] animate-pulse" />
-                  <p className="text-[#d3f55b]/80 text-[13px] font-mono font-bold tracking-widest">00:12</p>
+                  <span className="w-2 h-2 rounded-full bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] animate-pulse" />
+                  <p className="text-[#0056d2] dark:text-[#d3f55b]/80 text-[13px] font-mono font-bold tracking-widest">00:12</p>
                </div>
             </div>
             <div className="h-8 w-px bg-white/10 mx-2" />
-            <button onClick={() => setActiveCall(null)} className="w-[45px] h-[45px] rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center text-white shadow-[0_0_15px_rgba(239,68,68,0.4)] transition-transform hover:scale-110 transform">
+            <button onClick={() => setActiveCall(null)} className="w-[45px] h-[45px] rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center text-[#191c1e] dark:text-white shadow-[0_0_15px_rgba(239,68,68,0.4)] transition-transform hover:scale-110 transform">
                <Phone className="w-[20px] h-[20px] rotate-[135deg]" />
             </button>
         </div>
@@ -978,16 +1035,16 @@ export default function Home() {
 
       {showSettingsModal && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-[#121318] border border-white/10 rounded-[2rem] w-full max-w-md shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden">
-               <div className="p-6 border-b border-white/5 flex justify-between items-center">
-                  <h3 className="font-bold text-xl text-white">Settings</h3>
-                  <button onClick={() => setShowSettingsModal(false)} className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5 text-white/50" /></button>
+            <div className="bg-[#ffffff] dark:bg-[#121318] shadow-[0_24px_40px_rgba(25,28,30,0.04)] dark:shadow-[0_24px_40px_rgba(0,0,0,0.4)] border border-transparent dark:border-white/5 rounded-3xl w-full max-w-md shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden">
+               <div className="p-6 border-transparent dark:border-white/5 flex justify-between items-center">
+                  <h3 className="font-bold text-xl text-[#191c1e] dark:text-white">Settings</h3>
+                  <button onClick={() => setShowSettingsModal(false)} className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5 text-[#191c1e]/60 dark:text-white/60" /></button>
                </div>
                <div className="p-8 pb-10 flex flex-col items-center gap-4 text-center">
-                  <Settings className="w-16 h-16 text-[#d3f55b]/50 animate-spin-slow mb-2" style={{ animationDuration: '4s' }} />
-                  <p className="text-lg font-bold text-white">Full Settings Dashboard</p>
-                  <p className="text-white/40 text-sm">Theme customization, notification preferences, and account management are coming in v2.0!</p>
-                  <button onClick={() => setShowSettingsModal(false)} className="mt-4 bg-[#d3f55b] hover:bg-[#c6ef38] text-[#0a0a0c] px-8 py-3 rounded-xl font-bold shadow-lg transition-transform active:scale-95">Got it</button>
+                  <Settings className="w-16 h-16 text-[#0056d2] dark:text-[#d3f55b]/50 animate-spin-slow mb-2" style={{ animationDuration: '4s' }} />
+                  <p className="text-lg font-bold text-[#191c1e] dark:text-white">Full Settings Dashboard</p>
+                  <p className="text-[#191c1e]/50 dark:text-white/50 text-sm">Theme customization, notification preferences, and account management are coming in v2.0!</p>
+                  <button onClick={() => setShowSettingsModal(false)} className="mt-4 bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] hover:bg-[#c6ef38] text-[#191c1e] dark:text-white px-8 py-3 rounded-xl font-bold shadow-lg transition-transform active:scale-95">Got it</button>
                </div>
             </div>
         </div>
@@ -996,8 +1053,8 @@ export default function Home() {
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 9999px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(25,28,30,0.1); border-radius: 9999px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(25,28,30,0.2); }
       `}</style>
     </div>
   );
@@ -1008,9 +1065,9 @@ export default function Home() {
 function Field({ label, type, value, onChange, placeholder }: { label: string; type: string; value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
     <div>
-      <label className="text-[11px] font-black text-white/50 mb-1.5 ml-1 block uppercase tracking-wider">{label}</label>
+      <label className="text-[11px] font-black text-[#191c1e]/60 dark:text-white/60 mb-1.5 ml-1 block uppercase tracking-wider">{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} required
-        className="w-full px-4 py-3.5 bg-[#18191e] border border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#d3f55b]/50 text-white placeholder-white/30 text-sm shadow-inner transition-all hover:bg-[#1c1d22]" />
+        className="w-full px-4 py-3.5 bg-[#e0e3e5] dark:bg-[#18191e] border border-transparent dark:border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#0056d2] dark:ring-[#d3f55b]/50 text-[#191c1e] dark:text-white placeholder-white/30 text-sm shadow-inner transition-all hover:bg-[#1c1d22]" />
     </div>
   );
 }
@@ -1026,7 +1083,7 @@ function ErrorBox({ msg }: { msg: string }) {
 function AuthBtn({ loading, label }: { loading: boolean; label: string }) {
   return (
     <button type="submit" disabled={loading}
-      className="w-full bg-[#d3f55b] hover:bg-[#c6ef38] text-[#0a0a0c] py-3.5 rounded-xl font-bold transition-all flex items-center justify-center shadow-[0_0_20px_rgba(211,245,91,0.2)] hover:shadow-[0_0_25px_rgba(211,245,91,0.3)] disabled:opacity-50 text-[15px] transform active:scale-[0.98]">
+      className="w-full bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] hover:bg-[#c6ef38] text-[#191c1e] dark:text-white py-3.5 rounded-xl font-bold transition-all flex items-center justify-center shadow-[0_0_20px_rgba(211,245,91,0.2)] hover:shadow-[0_0_25px_rgba(211,245,91,0.3)] disabled:opacity-50 text-[15px] transform active:scale-[0.98]">
       {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : label}
     </button>
   );
@@ -1035,23 +1092,23 @@ function AuthBtn({ loading, label }: { loading: boolean; label: string }) {
 function Divider() {
   return (
     <div className="relative flex items-center gap-3 py-1">
-      <div className="flex-1 h-px bg-white/5" /><span className="text-white/30 text-[11px] font-bold uppercase tracking-wider">or</span><div className="flex-1 h-px bg-white/5" />
+      <div className="flex-1 h-px bg-white/5" /><span className="text-[#191c1e]/40 dark:text-white/40 text-[11px] font-bold uppercase tracking-wider">or</span><div className="flex-1 h-px bg-white/5" />
     </div>
   );
 }
 
-function NavItem({ icon, label, active, unread, onClick, subtitle }: any) {
+function NavItem({ icon, label, active, unread, onClick, subtitle }: { icon: React.ReactNode; label: string; active: boolean; unread?: number; onClick: () => void; subtitle?: string }) {
   return (
-    <button onClick={onClick} className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-2xl transition-all text-left group ${active ? 'bg-[#1a1b22] shadow-sm' : 'hover:bg-[#1a1b22]/50 border border-transparent'}`}>
-       <div className={`w-11 h-11 rounded-[14px] flex items-center justify-center flex-shrink-0 transition-all ${active ? 'bg-[#d3f55b] text-[#0a0a0c] shadow-[0_0_15px_rgba(211,245,91,0.2)]' : 'bg-[#212229] border border-white/[0.04] text-white/70 group-hover:bg-[#25262e] group-hover:text-white group-hover:shadow-sm'}`}>
+    <button onClick={onClick} className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-2xl transition-all text-left group ${active ? 'bg-[#f2f4f6] dark:bg-[#1a1b22] shadow-sm' : 'hover:bg-[#f2f4f6] dark:bg-[#1a1b22]/50 border border-transparent dark:border-white/5'}`}>
+       <div className={`w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all ${active ? 'bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white shadow-[0_8px_16px_rgba(0,86,210,0.15)] dark:shadow-[0_8px_16px_rgba(211,245,91,0.15)]' : 'bg-[#f2f4f6] dark:bg-[#1a1b22] border border-transparent dark:border-white/5 text-[#191c1e]/80 dark:text-white/80 group-hover:bg-[#e0e3e5] dark:bg-[#18191e] group-hover:text-[#191c1e] dark:text-white group-hover:shadow-sm'}`}>
           {icon}
        </div>
        <div className="flex-1 min-w-0 flex flex-col justify-center">
-          <p className={`text-[14px] font-bold truncate ${active ? 'text-white' : 'text-white/80'}`}>{label}</p>
-          <p className="text-[11px] font-medium text-white/40 truncate mt-0.5">{subtitle || 'Tap to chat...'}</p>
+          <p className={`text-[14px] font-bold truncate ${active ? 'text-[#191c1e] dark:text-white' : 'text-[#191c1e]/80 dark:text-white/80'}`}>{label}</p>
+          <p className="text-[11px] font-medium text-[#191c1e]/50 dark:text-white/50 truncate mt-0.5">{subtitle || 'Tap to chat...'}</p>
        </div>
        {unread ? (
-         <span className="bg-[#d3f55b] text-[#0a0a0c] text-[10px] font-black px-2 py-0.5 rounded-full min-w-[22px] text-center shadow-md group-hover:scale-110 transition-transform">
+         <span className="bg-gradient-to-br from-[#0040a1] to-[#0056d2] dark:from-[#d3f55b] dark:to-[#c6ef38] text-[#191c1e] dark:text-white text-[10px] font-black px-2 py-0.5 rounded-full min-w-[22px] text-center shadow-md group-hover:scale-110 transition-transform">
            {unread > 9 ? "9+" : unread}
          </span>
        ) : null}

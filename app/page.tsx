@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   MessageCircle, Zap, Shield, Image as ImageIcon,
-  ArrowRight, Search, Globe, ChevronRight, Menu, X,
+  ArrowRight, Search, Globe, Menu, X,
   Users, Lock, Star, Sparkles, Send, PlayCircle, Heart, Check
 } from "lucide-react";
 
