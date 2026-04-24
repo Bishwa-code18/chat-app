@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { client } from "@/utils/insforge";
 import {
   Send, LogOut, Loader2, Sparkles, AlertCircle,
-  Hash, Search, X, MessageSquare, Circle, Paperclip, FileText, Image as ImageIcon,
+  Hash, Search, X, MessageSquare, Circle, Paperclip, FileText,
+  Trash2, ChevronRight, Plus, Settings, Bell, Phone, Video, Pin, Users as UsersIcon, Image as ImageIcon, Menu
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,6 +53,14 @@ export default function Home() {
   const [attachPreview, setAttachPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── UI Interactivity States ───────────────────────────────────────────────
+  const [activeWorkspace, setActiveWorkspace] = useState('ICG');
+  const [showRightPanel, setShowRightPanel] = useState(true);
+  const [activeCall, setActiveCall] = useState<'audio'|'video'|null>(null);
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   // ── Users ─────────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Profile[]>([]);
@@ -61,6 +70,12 @@ export default function Home() {
   // ── Connection status (visible to user) ───────────────────────────────────
   const [connStatus, setConnStatus] = useState<"connecting" | "connected" | "error">("connecting");
   const [retryCount, setRetryCount] = useState(0);
+  const [typingUsers, setTypingUsers] = useState<Record<string, Set<string>>>({ global: new Set() });
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [toast, setToast] = useState<{ msg: string; channel: string } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const typingTimeoutRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const myProfileRef = useRef<Profile | null>(null);
@@ -89,6 +104,12 @@ export default function Home() {
     });
   }, [user]);
 
+  function showToast(msg: string, channel: string) {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ msg, channel });
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 4000);
+  }
+
   // ── Realtime setup — ONE channel, client-side filtering ───────────────────
   useEffect(() => {
     if (!myProfile || realtimeStarted.current) return;
@@ -97,20 +118,18 @@ export default function Home() {
     const start = async () => {
       setConnStatus("connecting");
 
-      // Register connection events
       client.realtime.on("connect", () => setConnStatus("connected"));
       client.realtime.on("connect_error", () => { setConnStatus("error"); realtimeStarted.current = false; });
       client.realtime.on("disconnect", () => { setConnStatus("connecting"); realtimeStarted.current = false; });
-      client.realtime.on("error", ({ code, message }: any) => console.warn("RT error", code, message));
+      client.realtime.on("error", ({ code, message }: Record<string, unknown>) => console.warn("RT error", code, message));
 
-      // ── Connect with explicit timeout catch ──────────────────────────────
       try {
         await client.realtime.connect();
-      } catch (err: any) {
-        console.warn("Realtime connect failed (timeout or network):", err?.message ?? err);
+      } catch (err: unknown) {
+        const error = err as Error;
+        console.warn("Realtime connect failed:", error?.message ?? error);
         setConnStatus("error");
         realtimeStarted.current = false;
-        // Auto-retry in 5 seconds
         retryTimerRef.current = setTimeout(() => {
           setRetryCount(c => c + 1);
         }, 5000);
@@ -119,28 +138,30 @@ export default function Home() {
 
       setConnStatus("connected");
 
-      // ── Subscribe to the ONE global channel ──────────────────────────────
       const subResult = await client.realtime.subscribe(GLOBAL_CHANNEL);
       if (!subResult.ok) {
-        console.error("Failed to subscribe to chat_room:", subResult.error);
+        console.error("Failed to subscribe:", subResult.error);
         setConnStatus("error");
         realtimeStarted.current = false;
         return;
       }
       console.log("✅ Subscribed to chat_room");
 
-      // ── Global messages ──────────────────────────────────────────────────
-      client.realtime.on("new_global_message", (payload: any) => {
+      client.realtime.on("new_global_message", (payload: unknown) => {
         const msg = payload as Message;
         if (!msg?.id) return;
         setMessages(prev => {
           if ((prev.global ?? []).find(m => m.id === msg.id)) return prev;
           return { ...prev, global: [...(prev.global ?? []), msg] };
         });
+
+        if (selectedChat !== "global") {
+          setUnreadCounts(prev => ({ ...prev, global: (prev.global ?? 0) + 1 }));
+          showToast(`New message in #Global`, "global");
+        }
       });
 
-      // ── DM messages — filtered client-side ───────────────────────────────
-      client.realtime.on("new_dm_message", (payload: any) => {
+      client.realtime.on("new_dm_message", (payload: unknown) => {
         const msg = payload as Message;
         if (!msg?.id) return;
         const me = myProfileRef.current;
@@ -162,23 +183,52 @@ export default function Home() {
           if ((prev[otherPersonId] ?? []).find(m => m.id === msg.id)) return prev;
           return { ...prev, [otherPersonId]: [...(prev[otherPersonId] ?? []), msg] };
         });
+
+        if (selectedChat !== otherPersonId) {
+          setUnreadCounts(prev => ({ ...prev, [otherPersonId]: (prev[otherPersonId] ?? 0) + 1 }));
+          showToast(`Direct message from ${msg.username}`, otherPersonId);
+        }
       });
 
-      // ── Presence ─────────────────────────────────────────────────────────
-      client.realtime.on("user_online", (payload: any) => {
-        if (payload?.user_id) setOnlineUserIds(prev => new Set(prev).add(payload.user_id));
+      client.realtime.on("user_online", (payload: Record<string, unknown>) => {
+        if (typeof payload?.user_id === "string") setOnlineUserIds(prev => new Set(prev).add(payload.user_id as string));
       });
-      client.realtime.on("user_offline", (payload: any) => {
-        if (payload?.user_id) setOnlineUserIds(prev => { const s = new Set(prev); s.delete(payload.user_id); return s; });
+      client.realtime.on("user_offline", (payload: Record<string, unknown>) => {
+        if (typeof payload?.user_id === "string") setOnlineUserIds(prev => { const s = new Set(prev); s.delete(payload.user_id as string); return s; });
       });
 
-      // Announce self as online
+      client.realtime.on("typing_start", (payload: Record<string, unknown>) => {
+        const { user_id, username, channel_id } = payload as { user_id: string; username: string; channel_id: string };
+        if (!user_id || user_id === myProfileRef.current?.id) return;
+        setTypingUsers(prev => {
+          const s = new Set(prev[channel_id] || []);
+          s.add(username);
+          return { ...prev, [channel_id]: s };
+        });
+      });
+
+      client.realtime.on("typing_stop", (payload: Record<string, unknown>) => {
+        const { username, channel_id } = payload as { username: string; channel_id: string };
+        setTypingUsers(prev => {
+          const s = new Set(prev[channel_id] || []);
+          s.delete(username);
+          return { ...prev, [channel_id]: s };
+        });
+      });
+
+      client.realtime.on("message_deleted", (payload: Record<string, unknown>) => {
+        const { id, channel_id } = payload as { id: string; channel_id: string };
+        setMessages(prev => {
+          const cid = channel_id === "global" ? "global" : channel_id;
+          return { ...prev, [cid]: (prev[cid] || []).filter(m => m.id !== id) };
+        });
+      });
+
       await client.realtime.publish(GLOBAL_CHANNEL, "user_online", {
         user_id: myProfile.id,
         username: myProfile.username,
       });
 
-      // Load global history
       const { data: hist } = await client.database
         .from("messages")
         .select("*")
@@ -197,13 +247,13 @@ export default function Home() {
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       const me = myProfileRef.current;
-      if (me) client.realtime.publish(GLOBAL_CHANNEL, "user_offline", { user_id: me.id }).catch(() => {});
+      if (me) client.realtime.publish(GLOBAL_CHANNEL, "user_offline", { user_id: me.id }).catch(() => { });
       client.realtime.disconnect();
       realtimeStarted.current = false;
     };
-  }, [myProfile, retryCount]); // retryCount triggers a fresh attempt // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myProfile, retryCount]);
 
-  // ── Manual reconnect ──────────────────────────────────────────────────────
   const handleReconnect = () => {
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     client.realtime.disconnect();
@@ -212,18 +262,17 @@ export default function Home() {
     setRetryCount(c => c + 1);
   };
 
-  // ── Open DM ───────────────────────────────────────────────────────────────
   const openDm = async (profile: Profile) => {
     setSelectedChat(profile.id);
+    setMobileMenuOpen(false);
+    setUnreadCounts(prev => ({ ...prev, [profile.id]: 0 }));
     setDmUsers(prev => prev.find(u => u.id === profile.id) ? prev : [...prev, profile]);
     setSearchQuery("");
     setSearchResults([]);
 
-    // Load DM history if not already loaded
     if (!messages[profile.id]) {
       const me = myProfileRef.current;
       if (!me) return;
-      // History: messages where (user_id=me AND recipient_id=them) OR (user_id=them AND recipient_id=me)
       const { data: sent } = await client.database.from("messages").select("*")
         .eq("user_id", me.id).eq("recipient_id", profile.id)
         .order("created_at", { ascending: true }).limit(80);
@@ -237,8 +286,39 @@ export default function Home() {
     }
   };
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  const loadMore = async () => {
+    if (loadingMore) return;
+    const currentMsgs = messages[selectedChat] ?? [];
+    if (currentMsgs.length === 0) return;
+
+    setLoadingMore(true);
+    const oldestDate = currentMsgs[0].created_at;
+    const isGlobal = selectedChat === "global";
+
+    let query = client.database.from("messages").select("*");
+
+    if (isGlobal) {
+      query = query.eq("channel", "global");
+    } else {
+      const me = myProfileRef.current;
+      if (!me) return;
+      query = query.or(`and(user_id.eq.${me.id},recipient_id.eq.${selectedChat}),and(user_id.eq.${selectedChat},recipient_id.eq.${me.id})`);
+    }
+
+    const { data: older } = await query
+      .lt("created_at", oldestDate)
+      .order("created_at", { ascending: false })
+      .limit(40);
+
+    if (older && older.length > 0) {
+      const newMsgs = [...(older as Message[])].reverse();
+      setMessages(prev => ({ ...prev, [selectedChat]: [...newMsgs, ...(prev[selectedChat] ?? [])] }));
+    }
+    setLoadingMore(false);
+  };
+
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!searchQuery.trim()) { setSearchResults([]); return; }
     const t = setTimeout(async () => {
       const { data } = await client.database.from("profiles").select("id, username")
@@ -248,7 +328,6 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [searchQuery, myProfile]);
 
-  // ── File attachment picker ────────────────────────────────────────────────
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -260,13 +339,11 @@ export default function Home() {
     } else {
       setAttachPreview(null);
     }
-    // Reset input so same file can be re-selected
     e.target.value = "";
   };
 
   const clearAttach = () => { setAttachFile(null); setAttachPreview(null); };
 
-  // ── Send ──────────────────────────────────────────────────────────────────
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     const me = myProfileRef.current;
@@ -276,7 +353,6 @@ export default function Home() {
     const msgId = crypto.randomUUID();
     const now = new Date().toISOString();
 
-    // Upload file first if attached
     let fileUrl: string | null = null;
     let fileKey: string | null = null;
     let fileName: string | null = null;
@@ -323,7 +399,18 @@ export default function Home() {
     setSendLoading(false);
   };
 
-  // ── Auth handlers ─────────────────────────────────────────────────────────
+  const handleDelete = async (msg: Message) => {
+    if (!confirm("Delete this message?")) return;
+    const cid = msg.channel === "global" ? "global" : (msg.recipient_id === myProfile?.id ? msg.user_id : msg.recipient_id!);
+    setMessages(prev => ({ ...prev, [cid]: (prev[cid] || []).filter(m => m.id !== msg.id) }));
+    await client.database.from("messages").delete().eq("id", msg.id);
+    if (msg.file_key) await client.storage.from("chat-attachments").remove(msg.file_key);
+    await client.realtime.publish(GLOBAL_CHANNEL, "message_deleted", {
+      id: msg.id,
+      channel_id: msg.channel === "global" ? "global" : myProfile?.id
+    });
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault(); setAuthLoading(true); setAuthError("");
     const { data, error } = await client.auth.signInWithPassword({ email, password });
@@ -363,7 +450,7 @@ export default function Home() {
     const gEmail = `guest${rnd}@insforge.app`, gPw = `Guest${rnd}!x`, gUname = `guest_${rnd}`;
     await client.auth.signUp({ email: gEmail, password: gPw });
     const { data, error } = await client.auth.signInWithPassword({ email: gEmail, password: gPw });
-    if (error || !data?.user) { setAuthError("Guest login failed — please sign up manually."); setAuthLoading(false); return; }
+    if (error || !data?.user) { setAuthError("Guest login failed."); setAuthLoading(false); return; }
     await client.database.from("profiles").insert([{ id: data.user.id, username: gUname }]);
     setUser({ id: data.user.id, email: data.user.email });
     setAuthLoading(false);
@@ -371,7 +458,7 @@ export default function Home() {
 
   const handleSignOut = async () => {
     const me = myProfileRef.current;
-    if (me) await client.realtime.publish(GLOBAL_CHANNEL, "user_offline", { user_id: me.id }).catch(() => {});
+    if (me) await client.realtime.publish(GLOBAL_CHANNEL, "user_offline", { user_id: me.id }).catch(() => { });
     await client.auth.signOut();
     client.realtime.disconnect();
     realtimeStarted.current = false;
@@ -379,27 +466,38 @@ export default function Home() {
     setDmUsers([]); setOnlineUserIds(new Set()); setConnStatus("connecting");
   };
 
-  // ─── Auth Screen ──────────────────────────────────────────────────────────
+  // ─── Format Utils ─────────────────────────────────────────────────────────
+  const formatTime = (dateStr: string) => {
+    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).toLowerCase();
+  };
+  const formatDateString = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString("en-GB", { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  // ─── Auth View ────────────────────────────────────────────────────────────
   if (!user || !myProfile) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#050508] p-4 font-sans text-white relative overflow-hidden">
+      <div className="flex min-h-screen items-center justify-center bg-[#0a0a0c] p-4 font-sans text-white relative overflow-hidden">
+        {/* Accents */}
         <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-[-15%] left-[-10%] w-[50%] h-[50%] bg-indigo-700/20 blur-[140px] rounded-full" />
-          <div className="absolute bottom-[-15%] right-[-10%] w-[50%] h-[50%] bg-purple-700/20 blur-[140px] rounded-full" />
+          <div className="absolute top-[-10%] left-[-5%] w-[40%] h-[40%] bg-[#d3f55b]/10 blur-[140px] rounded-full" />
+          <div className="absolute bottom-[-10%] right-[-5%] w-[40%] h-[40%] bg-white/5 blur-[140px] rounded-full" />
         </div>
-        <div className="w-full max-w-md z-10">
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <div className="bg-gradient-to-tr from-indigo-500 to-purple-600 p-2.5 rounded-2xl shadow-xl shadow-indigo-500/30">
-              <Sparkles className="w-7 h-7 text-white" />
-            </div>
-            <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-white/50">InsForge Chat</h1>
+        
+        {/* Box */}
+        <div className="w-full max-w-[420px] z-10">
+          <div className="flex items-center justify-center gap-3 mb-10">
+              <div className="bg-[#d3f55b] flex items-center justify-center w-12 h-12 rounded-xl shadow-[0_0_20px_rgba(211,245,91,0.2)] -skew-x-6">
+                <span className="text-[#0a0a0c] font-black text-2xl italic">S</span>
+              </div>
+              <h1 className="text-3xl font-extrabold tracking-tight text-white">InsForge</h1>
           </div>
-          <div className="bg-white/[0.04] backdrop-blur-2xl border border-white/10 rounded-3xl p-8 shadow-2xl">
+          <div className="bg-[#121318]/90 backdrop-blur-3xl border border-white/[0.05] rounded-3xl p-8 shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
             {!verifyStep && (
-              <div className="flex bg-black/30 rounded-xl p-1 mb-6">
+              <div className="flex bg-[#1a1b22] rounded-xl p-1.5 mb-6 shadow-inner border border-white/[0.02]">
                 {(["signin", "signup"] as const).map(mode => (
                   <button key={mode} type="button" onClick={() => { setAuthMode(mode); setAuthError(""); }}
-                    className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${authMode === mode ? "bg-indigo-600 text-white shadow-md" : "text-white/50 hover:text-white"}`}>
+                    className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${authMode === mode ? "bg-[#d3f55b] text-[#0a0a0c] shadow-sm transform scale-[1.02]" : "text-white/40 hover:text-white"}`}>
                     {mode === "signin" ? "Sign In" : "Sign Up"}
                   </button>
                 ))}
@@ -409,24 +507,24 @@ export default function Home() {
               <form onSubmit={handleVerify} className="flex flex-col gap-4">
                 <p className="text-white/70 text-sm text-center">Enter the 6-digit code sent to <strong>{email}</strong></p>
                 <input value={otp} onChange={e => setOtp(e.target.value)} placeholder="123456" maxLength={6}
-                  className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-white text-center text-2xl tracking-widest" />
+                  className="w-full px-4 py-3.5 bg-[#18191e] border border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#d3f55b] text-white text-center text-3xl tracking-widest shadow-inner transition-colors" />
                 {authError && <ErrorBox msg={authError} />}
                 <AuthBtn loading={authLoading} label="Verify Email" />
               </form>
             ) : authMode === "signin" ? (
-              <form onSubmit={handleSignIn} className="flex flex-col gap-4">
+              <form onSubmit={handleSignIn} className="flex flex-col gap-5">
                 <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
                 <Field label="Password" type="password" value={password} onChange={setPassword} placeholder="••••••••" />
                 {authError && <ErrorBox msg={authError} />}
                 <AuthBtn loading={authLoading} label="Sign In" />
                 <Divider />
                 <button type="button" onClick={handleGuestLogin} disabled={authLoading}
-                  className="w-full border border-dashed border-white/20 hover:bg-white/5 text-white/50 hover:text-white py-3 rounded-xl font-medium transition-all">
-                  {authLoading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : "Continue as Guest"}
+                  className="w-full border border-white/10 hover:border-white/30 bg-[#16171d] hover:bg-[#1a1b22] text-white/70 hover:text-white py-3.5 rounded-xl font-semibold transition-all shadow-sm">
+                  {authLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Continue as Guest"}
                 </button>
               </form>
             ) : (
-              <form onSubmit={handleSignUp} className="flex flex-col gap-4">
+              <form onSubmit={handleSignUp} className="flex flex-col gap-5">
                 <Field label="Username" type="text" value={usernameInput} onChange={setUsernameInput} placeholder="pick a username" />
                 <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
                 <Field label="Password" type="password" value={password} onChange={setPassword} placeholder="min. 8 characters" />
@@ -440,222 +538,466 @@ export default function Home() {
     );
   }
 
-  // ─── Chat Screen ──────────────────────────────────────────────────────────
+  // ─── Chat View ────────────────────────────────────────────────────────────
   const activeMsgs = messages[selectedChat] ?? [];
   const selectedDmUser = dmUsers.find(u => u.id === selectedChat);
-  const chatTitle = selectedChat === "global" ? "# Global Room" : `@ ${selectedDmUser?.username ?? "Direct Message"}`;
+  const chatTitle = selectedChat === "global" ? "Global Room" : selectedDmUser?.username ?? "Direct Message";
 
   return (
-    <div className="flex h-screen bg-[#050508] text-white font-sans overflow-hidden">
-
-      {/* Sidebar */}
-      <aside className="w-72 flex-shrink-0 bg-white/[0.02] border-r border-white/5 flex flex-col">
-        {/* Logo + status */}
-        <div className="p-5 border-b border-white/5 flex items-center gap-3">
-          <div className="bg-gradient-to-tr from-indigo-500 to-purple-600 p-1.5 rounded-xl">
-            <Sparkles className="w-5 h-5 text-white" />
-          </div>
-          <span className="font-bold text-base flex-1">InsForge Chat</span>
-          {connStatus === "error" ? (
-            <button onClick={handleReconnect}
-              title="Connection failed — click to retry"
-              className="text-[10px] font-semibold px-2 py-1 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" /> Retry
-            </button>
-          ) : (
-            <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${connStatus === "connected" ? "bg-emerald-500/20 text-emerald-400" : "bg-yellow-500/20 text-yellow-400 animate-pulse"}`}>
-              {connStatus === "connected" ? "Live" : "…"}
-            </span>
-          )}
+    <div className="flex h-[100dvh] bg-[#0a0a0c] text-white font-sans overflow-hidden md:p-2.5 md:gap-2.5">
+      
+      {/* 1. Leftmost Nav */}
+      <nav className={`w-[72px] flex-col items-center gap-5 py-6 flex-shrink-0 bg-[#121318] md:rounded-[2rem] border-r md:border border-white/[0.03] shadow-lg relative z-20 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
+        <div onClick={() => setActiveWorkspace('Home')} className="w-11 h-11 bg-[#d3f55b] rounded-[14px] flex items-center justify-center -skew-x-6 shadow-[0_0_20px_rgba(211,245,91,0.25)] cursor-pointer hover:scale-105 transition-transform">
+          <span className="text-[#0a0a0c] font-black text-2xl italic">S</span>
         </div>
-
-        {/* Search */}
-        <div className="p-4 border-b border-white/5 relative">
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-3 text-white/30" />
-            <input type="text" placeholder="Search username…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-black/30 border border-white/10 rounded-xl pl-9 pr-8 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-            {searchQuery && (
-              <button onClick={() => { setSearchQuery(""); setSearchResults([]); }} className="absolute right-3 top-3 text-white/30 hover:text-white">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-          {searchQuery && (
-            <div className="absolute left-4 right-4 top-[calc(100%-0.5rem)] bg-[#0f101a] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden">
-              {searchResults.length > 0 ? searchResults.map(p => (
-                <button key={p.id} onClick={() => openDm(p)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-indigo-500/20 transition-colors text-left">
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-700 to-purple-800 flex items-center justify-center text-xs font-bold flex-shrink-0">
-                    {p.username[0].toUpperCase()}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">{p.username}</p>
-                    <p className="text-xs">{onlineUserIds.has(p.id) ? <span className="text-emerald-400">● Online</span> : <span className="text-white/30">Offline</span>}</p>
-                  </div>
-                  <span className="ml-auto text-xs text-indigo-400 flex-shrink-0">Message →</span>
-                </button>
-              )) : (
-                <p className="px-4 py-3 text-sm text-white/40">No users found for "{searchQuery}"</p>
-              )}
+        
+        <div className="w-6 h-px bg-white/10 my-1" />
+        
+        <div className="flex flex-col gap-3 flex-1 overflow-y-auto w-full items-center custom-scrollbar">
+          {['Work', 'ICG', 'SP', 'BFF', 'MJ', 'GI'].map((lbl) => (
+            <div key={lbl} onClick={() => setActiveWorkspace(lbl)} className={`w-11 h-11 rounded-[1.2rem] flex items-center justify-center text-[11px] font-bold cursor-pointer transition-all ${activeWorkspace === lbl ? 'bg-[#d3f55b] text-[#0a0a0c] shadow-[0_8px_20px_rgba(211,245,91,0.2)]' : 'bg-[#2a2b30] text-white/80 hover:bg-[#34353a] hover:text-white hover:rounded-[0.9rem]'}`}>
+              {lbl}
             </div>
-          )}
+          ))}
         </div>
+        
+        <button onClick={() => setShowSettingsModal(true)} className="w-11 h-11 rounded-[1.2rem] bg-white/[0.03] text-white/60 flex items-center justify-center hover:bg-white/10 hover:text-white hover:rounded-[0.9rem] transition-all border border-white/[0.05]">
+          <Settings className="w-5 h-5" />
+        </button>
+        <button onClick={() => showToast("Add Workspace dialog opened", "global")} className="w-12 h-12 rounded-full bg-[#d3f55b] text-[#0a0a0c] flex items-center justify-center shadow-[0_0_15px_rgba(211,245,91,0.3)] transform transition-transform hover:scale-110 mt-2">
+          <Plus className="w-6 h-6" />
+        </button>
+      </nav>
 
-        {/* Nav */}
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-          <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest px-3 mb-2">Channels</p>
-          <NavItem icon={<Hash className="w-4 h-4" />} label="Global Room" active={selectedChat === "global"} onClick={() => setSelectedChat("global")} />
+      {/* 2. Messages Sidebar */}
+      <aside className={`flex-1 md:w-[300px] md:flex-shrink-0 flex-col h-full bg-[#121318] md:rounded-[2rem] overflow-hidden shadow-xl md:border border-white/[0.03] relative z-10 ${mobileMenuOpen ? 'flex' : 'hidden md:flex'}`}>
+         <div className="p-6 pb-4 border-b border-white/[0.04]">
+            <div className="flex items-center gap-3 mb-5">
+               <h2 className="font-bold text-[22px] text-white tracking-tight">Messages</h2>
+               <span className="bg-[#d3f55b] text-[#0a0a0c] text-[10px] font-bold px-2.5 py-0.5 rounded-full">{dmUsers.length + 1}</span>
+            </div>
+            <div className="relative">
+               <Search className="w-4 h-4 absolute left-3.5 top-[13px] text-white/30" />
+               <input type="text" placeholder="Search users..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  className="w-full bg-[#1a1b22] border border-white/[0.04] rounded-[14px] pl-10 pr-8 py-2.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-[#d3f55b]/50 transition-all shadow-inner placeholder-white/30" />
+               {searchQuery && (
+                 <button onClick={() => { setSearchQuery(""); setSearchResults([]); }} className="absolute right-3.5 top-[14px] text-white/40 hover:text-white">
+                   <X className="w-3.5 h-3.5" />
+                 </button>
+               )}
+            </div>
+         </div>
 
-          {dmUsers.length > 0 && (
-            <>
-              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest px-3 mt-5 mb-2">Direct Messages</p>
-              {dmUsers.map(u => (
-                <NavItem key={u.id}
-                  icon={
-                    <div className="relative">
-                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center text-[10px] font-bold">
-                        {u.username[0].toUpperCase()}
+         {searchQuery && (
+           <div className="absolute left-6 right-6 top-[125px] bg-[#1a1b22] border border-white/10 rounded-2xl shadow-2xl z-50 overflow-hidden">
+             {searchResults.length > 0 ? searchResults.map(p => (
+               <button key={p.id} onClick={() => openDm(p)}
+                 className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#d3f55b]/10 transition-colors text-left group">
+                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 flex items-center justify-center text-xs font-bold flex-shrink-0 shadow-sm border border-white/5">
+                   {p.username[0].toUpperCase()}
+                 </div>
+                 <div>
+                   <p className="text-sm font-bold truncate text-white">{p.username}</p>
+                   <p className="text-[11px]">{onlineUserIds.has(p.id) ? <span className="text-[#d3f55b] font-medium">Online</span> : <span className="text-white/30">Offline</span>}</p>
+                 </div>
+               </button>
+             )) : (
+               <p className="px-4 py-4 text-sm text-white/40 text-center font-medium">No users found</p>
+             )}
+           </div>
+         )}
+
+         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-1.5 custom-scrollbar">
+             <NavItem 
+                icon={<Hash className="w-4 h-4" />}
+                label="Global Room"
+                active={selectedChat === "global"}
+                onClick={() => { setSelectedChat("global"); setUnreadCounts(prev => ({ ...prev, global: 0 })); setMobileMenuOpen(false); }}
+                unread={unreadCounts.global}
+                subtitle="Community chat room"
+             />
+             {dmUsers.map(u => (
+                <NavItem 
+                   key={u.id}
+                   icon={
+                      <div className="w-full h-full flex items-center justify-center text-sm font-bold relative text-white">
+                         {u.username[0].toUpperCase()}
+                         {onlineUserIds.has(u.id) && <span className="absolute -bottom-0.5 -right-0.5 w-[10px] h-[10px] bg-[#d3f55b] rounded-full border-[2px] border-[#16171b]" />}
                       </div>
-                      {onlineUserIds.has(u.id) && <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-emerald-500 rounded-full border border-[#050508]" />}
-                    </div>
-                  }
-                  label={u.username} active={selectedChat === u.id} onClick={() => openDm(u)}
+                   }
+                   label={u.username} 
+                   active={selectedChat === u.id}
+                   unread={unreadCounts[u.id]}
+                   onClick={() => openDm(u)}
+                   subtitle={messages[u.id]?.[messages[u.id]?.length - 1]?.content || 'Tap to chat...'}
                 />
-              ))}
-            </>
-          )}
-        </nav>
+             ))}
+         </div>
 
-        {/* Self */}
-        <div className="p-4 border-t border-white/5 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-sm font-bold flex-shrink-0">
-            {myProfile.username[0].toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold truncate">{myProfile.username}</p>
-            <p className="text-xs text-emerald-400 flex items-center gap-1"><Circle className="w-2 h-2 fill-current" />Online</p>
-          </div>
-          <button onClick={handleSignOut} title="Sign out" className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-all">
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
+         <div className="p-4 border-t border-white/[0.03] bg-[#121318] mt-auto flex items-center gap-3">
+             <div onClick={() => setShowSettingsModal(true)} className="w-10 h-10 rounded-[14px] bg-[#d3f55b] flex items-center justify-center text-sm font-black text-[#0a0a0c] flex-shrink-0 shadow-[0_0_15px_rgba(211,245,91,0.2)] cursor-pointer hover:scale-105 transition-all">
+                 {myProfile.username[0].toUpperCase()}
+             </div>
+             <div className="flex-1 min-w-0">
+                 <p className="text-sm font-bold text-white truncate">{myProfile.username}</p>
+                 <p className="text-[11px] text-white/50 flex items-center gap-1.5 font-medium"><Circle className="w-1.5 h-1.5 fill-[#d3f55b] text-[#d3f55b]" /> Online</p>
+             </div>
+             <button onClick={handleSignOut} title="Sign out" className="p-2.5 rounded-xl bg-[#1a1b22] hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-all border border-white/5 hover:border-red-500/30">
+                 <LogOut className="w-4 h-4" />
+             </button>
+         </div>
       </aside>
 
-      {/* Chat Area */}
-      <main className="flex-1 flex flex-col min-w-0 relative">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-indigo-700/10 blur-[120px] rounded-full" />
-        </div>
+      {/* 3. Main Chat Area */}
+      <main className={`flex-1 flex-col min-w-0 bg-[#0a0a0c] relative z-0 ${mobileMenuOpen ? 'hidden md:flex' : 'flex'}`}>
+         <header className="flex h-[60px] md:h-[80px] items-center gap-3 md:gap-4 px-4 md:px-8 shrink-0">
+             <button onClick={() => setMobileMenuOpen(true)} className="md:hidden p-2 -ml-2 text-white/70 hover:text-white">
+                <Menu className="w-6 h-6" />
+             </button>
+             <h2 className="text-[20px] md:text-[25px] font-bold tracking-tight text-white/95">{chatTitle}</h2>
+             <div className="ml-auto flex items-center gap-2 md:gap-3">
+                 <div className="relative hidden md:block w-48">
+                     <Search className="w-4 h-4 absolute left-4 top-2.5 text-white/30" />
+                     <input type="text" placeholder="Search files/messages..." className="w-full bg-[#121318] border border-white/[0.04] rounded-full pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-[#d3f55b]/50 shadow-inner" />
+                 </div>
+                 
+                 <button onClick={() => setShowRightPanel(!showRightPanel)} className={`hidden md:block p-2.5 border border-white/[0.04] rounded-full transition-colors shadow-sm ml-1 ${showRightPanel ? 'bg-[#d3f55b]/20 text-[#d3f55b] border-[#d3f55b]/30' : 'bg-[#121318] text-white/70 hover:bg-white/10'}`}>
+                    <UsersIcon className="w-[18px] h-[18px]" />
+                 </button>
+                 
+                 <button onClick={() => showToast("You have 0 new notifications", "global")} className="p-2.5 bg-[#121318] border border-white/[0.04] rounded-full hover:bg-white/10 transition-colors shadow-sm"><Bell className="w-[18px] h-[18px] text-white/70" /></button>
+                 
+                 <div onClick={() => setShowSettingsModal(true)} className="w-[34px] h-[34px] md:w-[38px] md:h-[38px] rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-[13px] font-bold ml-1 md:ml-2 shadow-sm border border-white/10 cursor-pointer overflow-hidden transform transition-transform hover:scale-105 ring-2 ring-transparent hover:ring-[#d3f55b]/50">
+                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${myProfile.username}`} alt="me" className="w-full h-full object-cover bg-[#d3f55b]/10" />
+                 </div>
+             </div>
+         </header>
 
-        <header className="px-6 py-4 border-b border-white/5 bg-white/[0.02] backdrop-blur-xl z-10 flex items-center gap-3">
-          {selectedChat === "global" ? <Hash className="w-5 h-5 text-indigo-400" /> : <MessageSquare className="w-5 h-5 text-purple-400" />}
-          <h2 className="font-bold text-lg">{chatTitle}</h2>
-          {selectedChat !== "global" && (
-            <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${onlineUserIds.has(selectedChat) ? "bg-emerald-500/20 text-emerald-400" : "bg-white/5 text-white/30"}`}>
-              {onlineUserIds.has(selectedChat) ? "Online" : "Offline"}
-            </span>
-          )}
-        </header>
+         {/* Chat Box */}
+         <div className="flex-1 bg-[#16171d] md:rounded-[2.5rem] rounded-t-[2rem] md:mx-2 md:mb-2 flex flex-col overflow-hidden shadow-2xl relative border border-white/[0.03]">
+             
+             {/* Banner */}
+             {selectedChat === 'global' && (
+               <div className="h-[220px] shrink-0 relative m-4 rounded-[2rem] overflow-hidden z-10 shadow-lg border border-white/[0.04]">
+                 <img onClick={() => setLightboxImage("https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=2000&auto=format&fit=crop")} src="https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=2000&auto=format&fit=crop" className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-700" alt="Banner" />
+                 <div className="absolute inset-0 bg-gradient-to-t from-[#16171d] via-[#16171d]/20 to-transparent opacity-90 pointer-events-none" />
+               </div>
+             )}
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-1 z-10 custom-scrollbar">
-          {activeMsgs.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-white/20 gap-3">
-              <Sparkles className="w-10 h-10 opacity-40" />
-              <p className="text-base">No messages yet — say hello!</p>
-            </div>
-          ) : activeMsgs.map((msg, idx) => {
-            const isMe = msg.user_id === myProfile.id;
-            const prev = activeMsgs[idx - 1];
-            const grouped = prev && prev.user_id === msg.user_id;
-            return (
-              <div key={msg.id} className={`flex ${isMe ? "justify-end" : "justify-start"} ${grouped ? "mt-0.5" : "mt-5"}`}>
-                {!isMe && (
-                  <div className="w-8 mr-2 flex-shrink-0 self-end">
-                    {!grouped && (
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-700 to-slate-900 border border-white/10 flex items-center justify-center text-xs font-bold">
-                        {msg.username?.[0]?.toUpperCase() ?? "?"}
-                      </div>
-                    )}
+             {/* Messages */}
+             <div className={`flex-1 overflow-y-auto px-6 py-6 pb-2 space-y-1 relative z-10 custom-scrollbar ${selectedChat === 'global' ? '-mt-[100px]' : ''}`}>
+                {activeMsgs.length >= 80 && (
+                  <div className="flex justify-center mb-6">
+                    <button onClick={loadMore} disabled={loadingMore}
+                      className="text-xs font-bold px-5 py-2.5 rounded-full border border-white/10 bg-[#212229] hover:bg-[#282a33] text-white/60 hover:text-white transition-all shadow-md">
+                      {loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Load older messages"}
+                    </button>
                   </div>
                 )}
-                <div className="max-w-[70%]">
-                  {!isMe && !grouped && <p className="text-xs text-white/40 mb-1 ml-0.5">{msg.username}</p>}
-                  <div className={`rounded-2xl overflow-hidden text-sm ${isMe
-                    ? "bg-gradient-to-br from-indigo-600 to-purple-700 text-white rounded-tr-sm shadow-lg shadow-indigo-500/20"
-                    : "bg-white/8 border border-white/8 text-white/90 rounded-tl-sm"}`}>
-                    {/* File / image attachment */}
-                    {msg.file_url && msg.file_type?.startsWith("image/") && (
-                      <a href={msg.file_url} target="_blank" rel="noopener noreferrer">
-                        <img src={msg.file_url} alt={msg.file_name ?? "image"}
-                          className="max-w-[280px] max-h-64 w-full object-cover block" />
-                      </a>
-                    )}
-                    {msg.file_url && !msg.file_type?.startsWith("image/") && (
-                      <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
-                        className={`flex items-center gap-2 px-4 py-3 hover:opacity-80 transition-opacity ${isMe ? "" : ""}`}>
-                        <FileText className="w-5 h-5 flex-shrink-0" />
-                        <span className="text-xs font-medium truncate max-w-[200px]">{msg.file_name ?? "File"}</span>
-                        <span className="text-[10px] opacity-60 ml-auto flex-shrink-0">↓ Open</span>
-                      </a>
-                    )}
-                    {/* Text content */}
-                    {msg.content && (
-                      <p className="px-4 py-2.5 leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>
-                    )}
+                {activeMsgs.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-white/20 gap-4">
+                    <Sparkles className="w-12 h-12 opacity-40 text-[#d3f55b]" />
+                    <p className="text-[15px] font-medium">No messages yet — start the conversation!</p>
                   </div>
+                ) : activeMsgs.map((msg, idx) => {
+                  const prev = activeMsgs[idx - 1];
+                  const prevDate = prev ? new Date(prev.created_at).toDateString() : null;
+                  const currDate = new Date(msg.created_at).toDateString();
+                  const showDate = prevDate !== currDate;
+                  const grouped = prev && prev.user_id === msg.user_id && !showDate;
+
+                  return (
+                    <React.Fragment key={msg.id}>
+                      {showDate && (
+                        <div className="flex justify-center my-8">
+                            <span className="bg-[#212228]/80 border border-white/5 backdrop-blur-md text-white/50 text-[10px] font-bold px-4 py-1.5 rounded-full tracking-widest uppercase shadow-sm">
+                              {formatDateString(msg.created_at)}
+                            </span>
+                        </div>
+                      )}
+                      
+                      <div className={`flex gap-3.5 group mt-${grouped ? '1' : '6'} px-4 hover:bg-white/[0.015] py-1.5 -mx-4 rounded-2xl transition-colors`}>
+                        <div className="w-10 flex-shrink-0 flex justify-center mt-0.5">
+                          {!grouped && (
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#2a2b30] to-[#121318] flex items-center justify-center text-sm font-bold text-white shadow-sm ring-1 ring-white/10 relative overflow-hidden cursor-pointer" onClick={() => openDm({id: msg.user_id, username: msg.username})}>
+                                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${msg.username}`} alt="avatar" className="w-full h-full object-cover hover:scale-110 transition-transform" />
+                              </div>
+                          )}
+                        </div>
+                        
+                        <div className="flex-1 min-w-0 pb-1">
+                          {!grouped && (
+                            <div className="flex items-baseline gap-2.5 mb-1.5">
+                              <span className="font-bold text-white/95 text-[15px] leading-none cursor-pointer hover:underline decoration-white/30" onClick={() => openDm({id: msg.user_id, username: msg.username})}>{msg.username}</span>
+                              <span className="text-[11px] text-white/30 font-medium tracking-wide">{formatTime(msg.created_at)}</span>
+                            </div>
+                          )}
+                          
+                          <div className={`text-[14px] text-white/80 leading-relaxed max-w-[85%]`}>
+                              {msg.file_url && msg.file_type?.startsWith("image/") && (
+                                <div onClick={() => setLightboxImage(msg.file_url!)} className="cursor-pointer inline-block">
+                                  <img src={msg.file_url} alt={msg.file_name ?? "image"}
+                                    className="max-w-[300px] max-h-72 object-cover rounded-2xl border border-white/5 shadow-md mb-2 block hover:brightness-110 transition-all" />
+                                </div>
+                              )}
+                              {msg.file_url && !msg.file_type?.startsWith("image/") && (
+                                <a href={msg.file_url} target="_blank" rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-3 px-4 py-3.5 bg-[#212228] border border-white/5 rounded-[1rem] hover:bg-[#2a2b33] transition-all mb-2 shadow-sm focus:ring-2 focus:ring-[#d3f55b]/50">
+                                  <div className="p-2.5 bg-[#d3f55b]/10 text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>
+                                  <div className="min-w-0 max-w-[200px]">
+                                    <span className="text-[13px] font-bold truncate block pr-2 text-white/95">{msg.file_name ?? "File attachment"}</span>
+                                    <span className="text-[11px] text-white/40 font-medium">Click to open</span>
+                                  </div>
+                                </a>
+                              )}
+                              {msg.content && (
+                                <p className="break-words whitespace-pre-wrap">{msg.content}</p>
+                              )}
+                          </div>
+                        </div>
+
+                        {msg.user_id === myProfile.id && (
+                          <div className="flex items-start opacity-0 group-hover:opacity-100 transition-opacity pr-2 pt-1">
+                            <button onClick={() => handleDelete(msg)} className="p-2 hover:bg-red-500/10 text-red-400/50 hover:text-red-400 rounded-xl transition-colors border border-transparent hover:border-red-500/20">
+                                <Trash2 className="w-[15px] h-[15px]" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+                <div ref={messagesEndRef} className="h-2" />
+             </div>
+             
+             {/* Typing Indicator */}
+             {typingUsers[selectedChat] && typingUsers[selectedChat].size > 0 && (
+                <div className="px-10 py-1 bg-gradient-to-t from-[#16171d] via-[#16171d] to-transparent absolute bottom-[90px] w-full z-10 pointer-events-none">
+                  <span className="text-[12px] text-[#d3f55b] font-bold animate-pulse flex items-center gap-1.5 drop-shadow-md">
+                    <span className="flex gap-0.5">
+                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce [animation-delay:-0.3s]" />
+                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce [animation-delay:-0.15s]" />
+                      <span className="w-[5px] h-[5px] bg-[#d3f55b] rounded-full animate-bounce" />
+                    </span>
+                    <span className="text-white/70 font-medium ml-1">
+                      {Array.from(typingUsers[selectedChat]).join(", ")} {typingUsers[selectedChat].size === 1 ? "is" : "are"} typing...
+                    </span>
+                  </span>
                 </div>
-              </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
-        </div>
+             )}
 
-        {/* Input */}
-        <div className="p-4 md:p-6 z-10">
-          {/* File preview */}
-          {attachFile && (
-            <div className="max-w-4xl mx-auto mb-2 flex items-center gap-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-2.5">
-              {attachPreview
-                ? <img src={attachPreview} alt="preview" className="w-10 h-10 object-cover rounded-lg flex-shrink-0" />
-                : <FileText className="w-8 h-8 text-indigo-400 flex-shrink-0" />}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white truncate">{attachFile.name}</p>
-                <p className="text-xs text-white/40">{(attachFile.size / 1024).toFixed(1)} KB</p>
-              </div>
-              <button type="button" onClick={clearAttach} className="text-white/40 hover:text-white ml-auto">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          <form onSubmit={handleSend}
-            className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-2 max-w-4xl mx-auto focus-within:border-indigo-500/50 transition-all shadow-xl">
-            {/* Hidden file input */}
-            <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.zip" onChange={handleFileChange} className="hidden" />
-            <button type="button" onClick={() => fileInputRef.current?.click()}
-              title="Attach file"
-              className="p-2 rounded-lg text-white/40 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all flex-shrink-0">
-              <Paperclip className="w-4 h-4" />
-            </button>
-            <input type="text" value={input} onChange={e => setInput(e.target.value)}
-              placeholder={selectedChat === "global" ? "Message the room…" : `Message @${selectedDmUser?.username ?? "…"}`}
-              className="flex-1 bg-transparent py-2 text-white placeholder-white/30 focus:outline-none text-sm" autoComplete="off" />
-            <button type="submit" disabled={(!input.trim() && !attachFile) || sendLoading}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/10 disabled:text-white/30 text-white p-2.5 rounded-xl transition-all flex-shrink-0">
-              {sendLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </button>
-          </form>
-        </div>
+             {/* Input Container */}
+             <div className="p-5 z-20 pb-5">
+                {attachFile && (
+                  <div className="mx-2 mb-3 flex items-center gap-4 bg-[#2a2b33] border border-white/5 rounded-2xl px-5 py-3 shadow-lg w-max max-w-[80%]">
+                    {attachPreview
+                      ? <img onClick={() => setLightboxImage(attachPreview)} src={attachPreview} alt="preview" className="w-[42px] h-[42px] object-cover rounded-[12px] flex-shrink-0 shadow-sm cursor-pointer hover:brightness-110" />
+                      : <div className="p-2.5 bg-[#d3f55b]/20 text-[#d3f55b] rounded-[12px]"><FileText className="w-5 h-5 flex-shrink-0" /></div>}
+                    <div className="flex-1 min-w-0 pr-4">
+                      <p className="text-[13px] font-bold text-white truncate">{attachFile.name}</p>
+                      <p className="text-[11px] text-white/40 font-medium">{(attachFile.size / 1024).toFixed(1)} KB</p>
+                    </div>
+                    <button type="button" onClick={clearAttach} className="text-white/40 hover:text-white p-1.5 hover:bg-white/10 rounded-full transition-all">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                <form onSubmit={handleSend} className="flex items-center gap-1 md:gap-2 bg-[#212229] border border-white/[0.04] rounded-full px-2 py-2 shadow-inner transition-all hover:bg-[#25262e] focus-within:ring-1 focus-within:ring-[#d3f55b]/50 md:mx-2 focus-within:border-[#d3f55b]/30">
+                     <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.zip" onChange={handleFileChange} className="hidden" />
+                     <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 rounded-full text-white/40 hover:text-[#d3f55b] hover:bg-[#d3f55b]/10 transition-all flex-shrink-0 ml-1">
+                        <Paperclip className="w-[18px] h-[18px]" />
+                     </button>
+                     <input type="text" value={input} 
+                        onChange={e => {
+                          const val = e.target.value;
+                          setInput(val);
+                          if (val.trim() && myProfile) {
+                            const channel_id = selectedChat;
+                            if (!typingTimeoutRef.current[channel_id]) {
+                              client.realtime.publish(GLOBAL_CHANNEL, "typing_start", { user_id: myProfile.id, username: myProfile.username, channel_id });
+                            }
+                            if (typingTimeoutRef.current[channel_id]) clearTimeout(typingTimeoutRef.current[channel_id]);
+                            typingTimeoutRef.current[channel_id] = setTimeout(() => {
+                              client.realtime.publish(GLOBAL_CHANNEL, "typing_stop", { username: myProfile.username, channel_id });
+                              delete typingTimeoutRef.current[channel_id];
+                            }, 2000);
+                          }
+                        }}
+                        placeholder="Write a message..." autoComplete="off"
+                        className="flex-1 bg-transparent py-2.5 px-2 text-white placeholder-white/30 focus:outline-none text-[14px] font-medium" />
+                     
+                     <div className="flex items-center gap-1 pr-1">
+                       <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 text-white/40 hover:text-white transition-all rounded-full hover:bg-white/5"><ImageIcon className="w-[18px] h-[18px]" /></button>
+                       <button type="submit" disabled={(!input.trim() && !attachFile) || sendLoading}
+                         className="bg-[#d3f55b] hover:bg-[#cbf141] disabled:bg-white/5 disabled:text-white/20 text-[#0a0a0c] w-[42px] h-[42px] rounded-full flex items-center justify-center transition-all flex-shrink-0 shadow-[0_4px_12px_rgba(211,245,91,0.2)] disabled:shadow-none ml-1 transform active:scale-95 disabled:active:scale-100">
+                         {sendLoading ? <Loader2 className="w-[18px] h-[18px] animate-spin" /> : <Send className="w-[18px] h-[18px] ml-0.5" />}
+                       </button>
+                     </div>
+                </form>
+             </div>
+         </div>
+         
+         {toast && (
+           <div className="absolute top-24 right-10 z-[60] animate-in fade-in slide-in-from-right-4 duration-300">
+             <button onClick={() => { setSelectedChat(toast.channel); setUnreadCounts(prev => ({ ...prev, [toast.channel]: 0 })); setToast(null); }}
+               className="bg-[#d3f55b] text-[#0a0a0c] px-5 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 hover:brightness-110 transition-all active:scale-95 group font-bold">
+               <div className="bg-[#0a0a0c]/10 p-2 rounded-xl">
+                 <MessageSquare className="w-[18px] h-[18px]" />
+               </div>
+               <div className="text-left pr-4">
+                 <p className="text-[11px] font-black uppercase tracking-wider opacity-60">Notification</p>
+                 <p className="text-[14px] leading-tight">{toast.msg}</p>
+               </div>
+             </button>
+           </div>
+         )}
       </main>
+
+      {/* 4. Right Sidebar */}
+      {showRightPanel && (
+      <aside className="w-[310px] hidden xl:flex flex-col gap-4 py-2 pr-1 flex-shrink-0 h-full relative z-10 animate-in slide-in-from-right-10 duration-300">
+         <div className="flex justify-between items-center px-1 pt-1.5 shrink-0">
+            <button onClick={() => setActiveCall(activeCall === 'audio' ? null : 'audio')} className={`w-[52px] h-[52px] rounded-[1.2rem] flex items-center justify-center shadow-[0_6px_20px_rgba(211,245,91,0.25)] hover:scale-105 transition-all ${activeCall === 'audio' ? 'bg-red-500 text-white shadow-red-500/30' : 'bg-[#d3f55b] text-[#0a0a0c]'}`}><Phone className={`w-[20px] h-[20px] ${activeCall === 'audio' ? 'rotate-[135deg]' : ''}`} /></button>
+            <button onClick={() => setActiveCall(activeCall === 'video' ? null : 'video')} className={`w-[52px] h-[52px] rounded-[1.2rem] flex items-center justify-center transition-all border shadow-md hover:scale-105 ${activeCall === 'video' ? 'bg-red-500 text-white border-red-500 shadow-red-500/30' : 'bg-[#1a1b22] text-white/70 border-white/5 hover:bg-white/10 hover:text-white'}`}><Video className="w-[20px] h-[20px]" /></button>
+            <button onClick={() => showToast("Chat pinned to favorites", "global")} className="w-[52px] h-[52px] rounded-[1.2rem] bg-[#1a1b22] text-white/70 flex items-center justify-center hover:bg-white/10 hover:text-white transition-all border border-white/5 shadow-md active:scale-95"><Pin className="w-[20px] h-[20px]" /></button>
+            <button onClick={() => setShowRightPanel(false)} className="w-[52px] h-[52px] rounded-[1.2rem] bg-[#1a1b22] text-[#d3f55b] flex items-center justify-center hover:bg-white/10 transition-all border border-[#d3f55b]/50 shadow-md ring-1 ring-[#d3f55b]/20 active:scale-95"><UsersIcon className="w-[20px] h-[20px]" /></button>
+         </div>
+         
+         <div className="bg-[#121318] rounded-[2rem] p-6 border border-white/[0.03] flex-1 overflow-y-auto mt-2 custom-scrollbar shadow-lg">
+            <h3 className="text-white/95 font-bold text-[17px] mb-5 tracking-tight flex items-center justify-between">
+               Members
+               <span className="text-[11px] text-white/40 bg-white/5 px-2 py-0.5 rounded-full font-medium">{onlineUserIds.size + 1} online</span>
+            </h3>
+            <div className="space-y-4">
+               {/* admin */}
+               <div className="flex items-center gap-3.5 group cursor-pointer" onClick={() => showToast("Cannot DM Admin right now", "global")}>
+                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 group-hover:border-[#d3f55b]/50 transition-colors">
+                      <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Admin" className="w-full h-full p-1 group-hover:scale-110 transition-transform" alt="admin" />
+                      <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[14px] font-bold text-white/90 group-hover:text-white transition-colors">Richard Wilson</span>
+                      <span className="text-[11px] text-white/40 font-medium">Head of Design</span>
+                   </div>
+                   <span className="text-[9px] font-black text-[#0a0a0c] bg-[#d3f55b] ml-auto px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm group-hover:scale-110 transition-transform">Admin</span>
+               </div>
+               
+               {/* Map online users visually */}
+               {Array.from(onlineUserIds).length > 0 ? Array.from(onlineUserIds).map(uid => {
+                  const prof = uid === myProfile.id ? myProfile : dmUsers.find(d => d.id === uid) || { username: 'User' };
+                  return (
+                     <div key={uid} className="flex items-center gap-3.5 group cursor-pointer" onClick={() => uid !== myProfile.id ? openDm({id: uid, username: prof.username}) : showToast("This is you!", "global")}>
+                         <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#1a1b22] to-[#0a0a0c] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 group-hover:border-[#d3f55b]/50 transition-colors overflow-hidden">
+                            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${prof.username}`} className="w-full h-full scale-110 group-hover:scale-125 transition-transform" alt="avatar" />
+                            <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                         </div>
+                         <div className="flex flex-col">
+                           <span className="text-[14px] font-bold text-white/90 group-hover:underline">{prof.username} {uid === myProfile.id && <span className="text-white/30 font-medium ml-1 no-underline">(You)</span>}</span>
+                           <span className="text-[11px] text-white/40 font-medium text-ellipsis overflow-hidden whitespace-nowrap max-w-[120px]">
+                              {messages[uid]?.[messages[uid].length-1]?.content || 'Online now'}
+                           </span>
+                         </div>
+                     </div>
+                  )
+               }) : (
+                 <div className="flex items-center gap-3.5 group cursor-pointer" onClick={() => showToast("This is you!", "global")}>
+                     <div className="w-10 h-10 rounded-full bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-white relative border border-white/10">
+                        {myProfile.username[0].toUpperCase()}
+                        <span className="absolute -bottom-[2px] -right-[2px] w-[12px] h-[12px] bg-[#d3f55b] rounded-full border-[2.5px] border-[#121318]" />
+                     </div>
+                     <span className="text-[14px] font-bold text-white/90">{myProfile.username} <span className="text-white/30 font-medium ml-1">(You)</span></span>
+                 </div>
+               )}
+               {/* Some mocked offline users for styling */}
+               <div className="flex items-center gap-3.5 group cursor-pointer opacity-50 hover:opacity-100 transition-opacity" onClick={() => showToast("User is offline. Cannot message right now.", "global")}>
+                   <div className="w-10 h-10 rounded-full bg-[#1a1b22] flex items-center justify-center text-xs font-bold text-white relative border border-white/10 overflow-hidden">
+                      <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah" className="w-full h-full scale-110" alt="sarah" />
+                   </div>
+                   <div className="flex flex-col">
+                      <span className="text-[14px] font-bold text-white/90">Sarah Parker</span>
+                      <span className="text-[11px] text-white/40 font-medium">Offline</span>
+                   </div>
+               </div>
+            </div>
+         </div>
+         
+         <div className="bg-[#121318] rounded-[2rem] p-6 border border-white/[0.03] shrink-0 shadow-lg">
+            <h3 className="text-white/95 font-bold text-[17px] mb-4 tracking-tight flex justify-between items-center group cursor-pointer" onClick={() => showToast("Opening Files Explorer", "global")}>
+              Files 
+              <ChevronRight className="w-4 h-4 text-white/30 group-hover:translate-x-1 group-hover:text-[#d3f55b] transition-all" />
+            </h3>
+            <div onClick={() => showToast("Loading gallery...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-white/80 font-medium text-[13px] mb-3 group">
+               <div className="p-2 bg-[#1a1b22] group-hover:bg-[#d3f55b] group-hover:text-[black] rounded-[10px] transition-colors"><ImageIcon className="w-4 h-4 text-white/70 group-hover:text-black" /></div>
+               <span className="flex-1 text-white/90">115 photos</span>
+               <ChevronRight className="w-4 h-4 text-white/30" />
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#1a1b22] rounded-[14px] overflow-hidden shrink-0 border border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1605806616949-1e87b487cb2a?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
+               <div onClick={() => setLightboxImage("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2000&auto=format&fit=crop")} className="h-20 bg-[#1a1b22] rounded-[14px] overflow-hidden shrink-0 border border-white/5 cursor-zoom-in hover:border-[#d3f55b]/50 transition-all"><img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=300&auto=format&fit=crop" className="w-full h-full object-cover hover:scale-110 transition-transform" alt="file" /></div>
+            </div>
+            
+            <div className="h-px bg-white/5 my-4" />
+            
+            <div onClick={() => showToast("Loading documents...", "global")} className="flex items-center gap-2 cursor-pointer hover:bg-[#1a1b22] p-2 -mx-2 rounded-xl transition-colors text-white/80 font-medium text-[13px] group">
+               <div className="p-2 bg-[#1a1b22] group-hover:bg-[#d3f55b] group-hover:text-black rounded-[10px] transition-colors"><FileText className="w-4 h-4 text-white/70 group-hover:text-black" /></div>
+               <span className="flex-1 text-white/90">208 files</span>
+               <ChevronRight className="w-4 h-4 text-white/30" />
+            </div>
+         </div>
+      </aside>
+      )}
+
+      {/* Global Overlays & Modals */}
+      {lightboxImage && (
+        <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setLightboxImage(null)}>
+            <img src={lightboxImage} alt="Fullscreen" className="max-w-[90vw] max-h-[90vh] rounded-[2rem] border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.8)] object-contain" onClick={e => e.stopPropagation()} />
+            <button className="absolute top-8 right-8 p-3 bg-white/10 rounded-full hover:bg-white/20 hover:scale-110 transition-all text-white backdrop-blur-lg"><X className="w-6 h-6" /></button>
+        </div>
+      )}
+
+      {activeCall && (
+        <div className="fixed top-10 left-1/2 -translate-x-1/2 z-[80] bg-[#1a1b22]/90 backdrop-blur-xl border border-[#d3f55b]/30 pl-4 pr-6 py-4 rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex items-center gap-6 animate-in slide-in-from-top-10 duration-500">
+            <div className="flex -space-x-3 items-center">
+                <div className="w-[50px] h-[50px] rounded-full border-4 border-[#1a1b22] overflow-hidden bg-gray-800 z-20"><img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${myProfile.username}`} className="w-full h-full object-cover scale-110" /></div>
+                <div className="w-[50px] h-[50px] rounded-full border-4 border-[#1a1b22] overflow-hidden bg-gray-800 z-10"><img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=Admin`} className="w-full h-full object-cover scale-110 p-1" /></div>
+            </div>
+            <div>
+               <p className="text-white font-bold text-[15px]">{activeCall === 'video' ? 'Video' : 'Audio'} Call in progress</p>
+               <div className="flex items-center gap-2 mt-0.5">
+                  <span className="w-2 h-2 rounded-full bg-[#d3f55b] animate-pulse" />
+                  <p className="text-[#d3f55b]/80 text-[13px] font-mono font-bold tracking-widest">00:12</p>
+               </div>
+            </div>
+            <div className="h-8 w-px bg-white/10 mx-2" />
+            <button onClick={() => setActiveCall(null)} className="w-[45px] h-[45px] rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center text-white shadow-[0_0_15px_rgba(239,68,68,0.4)] transition-transform hover:scale-110 transform">
+               <Phone className="w-[20px] h-[20px] rotate-[135deg]" />
+            </button>
+        </div>
+      )}
+
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-[#121318] border border-white/10 rounded-[2rem] w-full max-w-md shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden">
+               <div className="p-6 border-b border-white/5 flex justify-between items-center">
+                  <h3 className="font-bold text-xl text-white">Settings</h3>
+                  <button onClick={() => setShowSettingsModal(false)} className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5 text-white/50" /></button>
+               </div>
+               <div className="p-8 pb-10 flex flex-col items-center gap-4 text-center">
+                  <Settings className="w-16 h-16 text-[#d3f55b]/50 animate-spin-slow mb-2" style={{ animationDuration: '4s' }} />
+                  <p className="text-lg font-bold text-white">Full Settings Dashboard</p>
+                  <p className="text-white/40 text-sm">Theme customization, notification preferences, and account management are coming in v2.0!</p>
+                  <button onClick={() => setShowSettingsModal(false)} className="mt-4 bg-[#d3f55b] hover:bg-[#c6ef38] text-[#0a0a0c] px-8 py-3 rounded-xl font-bold shadow-lg transition-transform active:scale-95">Got it</button>
+               </div>
+            </div>
+        </div>
+      )}
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 9999px; }
-        .bg-white\/8 { background-color: rgba(255,255,255,0.08); }
-        .border-white\/8 { border-color: rgba(255,255,255,0.08); }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
       `}</style>
     </div>
   );
@@ -666,16 +1008,16 @@ export default function Home() {
 function Field({ label, type, value, onChange, placeholder }: { label: string; type: string; value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
     <div>
-      <label className="text-xs font-medium text-white/50 mb-1 ml-0.5 block">{label}</label>
+      <label className="text-[11px] font-black text-white/50 mb-1.5 ml-1 block uppercase tracking-wider">{label}</label>
       <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} required
-        className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 text-white placeholder-white/30 text-sm" />
+        className="w-full px-4 py-3.5 bg-[#18191e] border border-white/5 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#d3f55b]/50 text-white placeholder-white/30 text-sm shadow-inner transition-all hover:bg-[#1c1d22]" />
     </div>
   );
 }
 
 function ErrorBox({ msg }: { msg: string }) {
   return (
-    <div className="flex items-start gap-2 text-red-400 bg-red-500/10 border border-red-500/20 p-3 rounded-xl text-sm">
+    <div className="flex items-start gap-2.5 text-red-400 bg-red-500/10 border border-red-500/20 p-4 rounded-xl text-sm font-medium">
       <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" /><p>{msg}</p>
     </div>
   );
@@ -684,7 +1026,7 @@ function ErrorBox({ msg }: { msg: string }) {
 function AuthBtn({ loading, label }: { loading: boolean; label: string }) {
   return (
     <button type="submit" disabled={loading}
-      className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 py-3 rounded-xl font-semibold transition-all flex items-center justify-center shadow-lg shadow-indigo-500/25">
+      className="w-full bg-[#d3f55b] hover:bg-[#c6ef38] text-[#0a0a0c] py-3.5 rounded-xl font-bold transition-all flex items-center justify-center shadow-[0_0_20px_rgba(211,245,91,0.2)] hover:shadow-[0_0_25px_rgba(211,245,91,0.3)] disabled:opacity-50 text-[15px] transform active:scale-[0.98]">
       {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : label}
     </button>
   );
@@ -692,18 +1034,27 @@ function AuthBtn({ loading, label }: { loading: boolean; label: string }) {
 
 function Divider() {
   return (
-    <div className="relative flex items-center gap-2">
-      <div className="flex-1 h-px bg-white/10" /><span className="text-white/30 text-xs">or</span><div className="flex-1 h-px bg-white/10" />
+    <div className="relative flex items-center gap-3 py-1">
+      <div className="flex-1 h-px bg-white/5" /><span className="text-white/30 text-[11px] font-bold uppercase tracking-wider">or</span><div className="flex-1 h-px bg-white/5" />
     </div>
   );
 }
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, active, unread, onClick, subtitle }: any) {
   return (
-    <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${active ? "bg-indigo-500/20 border border-indigo-500/30 text-indigo-300" : "text-white/60 hover:bg-white/5 hover:text-white border border-transparent"}`}>
-      <span className="w-5 h-5 flex-shrink-0 flex items-center justify-center">{icon}</span>
-      <span className="text-sm font-medium truncate">{label}</span>
+    <button onClick={onClick} className={`w-full flex items-center gap-3.5 px-3 py-3 rounded-2xl transition-all text-left group ${active ? 'bg-[#1a1b22] shadow-sm' : 'hover:bg-[#1a1b22]/50 border border-transparent'}`}>
+       <div className={`w-11 h-11 rounded-[14px] flex items-center justify-center flex-shrink-0 transition-all ${active ? 'bg-[#d3f55b] text-[#0a0a0c] shadow-[0_0_15px_rgba(211,245,91,0.2)]' : 'bg-[#212229] border border-white/[0.04] text-white/70 group-hover:bg-[#25262e] group-hover:text-white group-hover:shadow-sm'}`}>
+          {icon}
+       </div>
+       <div className="flex-1 min-w-0 flex flex-col justify-center">
+          <p className={`text-[14px] font-bold truncate ${active ? 'text-white' : 'text-white/80'}`}>{label}</p>
+          <p className="text-[11px] font-medium text-white/40 truncate mt-0.5">{subtitle || 'Tap to chat...'}</p>
+       </div>
+       {unread ? (
+         <span className="bg-[#d3f55b] text-[#0a0a0c] text-[10px] font-black px-2 py-0.5 rounded-full min-w-[22px] text-center shadow-md group-hover:scale-110 transition-transform">
+           {unread > 9 ? "9+" : unread}
+         </span>
+       ) : null}
     </button>
   );
 }

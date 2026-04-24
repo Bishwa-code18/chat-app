@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Chat-me",
-  description: "Chat with your friends",
+  title: "InsForge Chat | Real-Time Messaging & File Sharing",
+  description: "Experience lightning-fast communication with InsForge Chat. Real-time messaging, secure file sharing, and seamless global connectivity built for the modern web.",
+  keywords: ["chat", "real-time", "insforge", "messaging", "file sharing", "websocket"],
 };
 
 export default function RootLayout({
